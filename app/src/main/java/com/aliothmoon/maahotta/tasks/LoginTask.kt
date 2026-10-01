@@ -40,13 +40,13 @@ class LoginTask(
         finalHudConfirmationAllowed = false
         ctx.log(
             when {
-                launchGame -> "启动游戏，识别当前登录状态"
+                launchGame -> "强制关闭并重新启动游戏，识别当前登录状态"
                 forceSwitchWithoutVerification -> "从用户中心直接切换到下一账号"
                 else -> "游戏已启动，继续识别当前登录状态"
             },
         )
-        if (launchGame && !ctx.device.launchApp(Packages.OFFICIAL)) {
-            return TaskResult(title, false, "无法启动游戏，请检查安装包和控制权限")
+        if (launchGame && !ctx.device.launchApp(Packages.OFFICIAL, forceStop = true)) {
+            return TaskResult(title, false, "无法强制重启游戏，请检查 Shizuku 授权和游戏安装状态", retryable = false)
         }
         // Capture readiness and login-screen recognition share one hard limit.
         // Return a normal failure so the existing diagnostic/report path runs.

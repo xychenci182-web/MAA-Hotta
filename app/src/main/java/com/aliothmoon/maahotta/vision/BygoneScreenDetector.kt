@@ -11,6 +11,14 @@ object BygoneScreenDetector {
     private val exitIconRegion = SearchRegion(0.10f, 0f, 0.21f, 0.16f)
     private val exitDialogRegion = SearchRegion(0.31f, 0.34f, 0.70f, 0.53f)
     private val confirmRegion = SearchRegion(0.52f, 0.44f, 0.80f, 0.66f)
+    private val warpStartRegion = SearchRegion(0.30f, 0.38f, 0.75f, 0.59f)
+
+    /** Transition marker only; never used as a tap target. */
+    fun findWarpStart(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, warpStartRegion, 0.78f)
+
+    fun exclusiveEntryAction(skip: MatchResult?, exit: MatchResult?): MatchResult? =
+        if ((skip != null) == (exit != null)) null else skip ?: exit
 
     fun findEntry(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, entryRegion, 0.55f)

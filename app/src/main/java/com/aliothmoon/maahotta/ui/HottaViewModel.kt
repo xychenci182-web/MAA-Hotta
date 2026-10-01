@@ -227,6 +227,9 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
             val ctx = BotContext(ReferenceFrameController(device), templates, ::log)
             val summaries = mutableListOf<String>()
             val mailNoRewardAccounts = linkedSetOf<String>()
+            val merchantAccounts = linkedMapOf<String, String>()
+            var allTasksSucceeded = true
+            var completedAccounts = 0
             for ((index, account) in accounts.withIndex()) {
                 val accountLogStart = completeRunLogSize()
                 val engine = TaskEngine(ctx) {
@@ -245,6 +248,9 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                             islandMerchantCheckedThisRun = true
                             if (found) {
                                 islandMerchantDetectedThisRun = true
+                                merchantAccounts[account.id] = merchantRecordNote(account)
+                                    ?: account.characterName.takeIf { it.isNotBlank() }
+                                    ?: "账号 ${index + 1}"
                                 val accountNote = merchantRecordNote(account)
                                 if (accountNote != null) {
                                     val file = islandMerchantRecords.append(accountNote)
@@ -261,6 +267,8 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                                     it.copy(islandMerchantPending = !islandMerchantRecordedThisRun)
                                 }
                             } else {
+                                merchantAccounts.remove(account.id)
+                                islandMerchantDetectedThisRun = false
                                 store.updateAccount(account.id) {
                                     it.copy(islandMerchantPending = false)
                                 }
@@ -307,6 +315,11 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                                 account.islandMerchantPending
                             }
                         val accountNote = merchantRecordNote(account)
+                        if (merchantNeedsRecord) {
+                            merchantAccounts[account.id] = accountNote
+                                ?: account.characterName.takeIf { it.isNotBlank() }
+                                ?: "账号 ${index + 1}"
+                        }
                         if (merchantNeedsRecord && accountNote != null) {
                             val file = islandMerchantRecords.append(accountNote)
                             if (file != null) {
@@ -332,6 +345,7 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                                     (islandMerchantDetectedThisRun || account.islandMerchantPending)
                                 if (shouldRecord) {
                                     val recordName = merchantRecordNote(account) ?: characterName
+                                    merchantAccounts[account.id] = recordName
                                     val file = islandMerchantRecords.append(recordName)
                                     if (file != null) {
                                         queueReportAttachment(
@@ -359,6 +373,8 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val failedResults = results.filterNot { it.ok }
+                completedAccounts++
+                if (failedResults.isNotEmpty()) allTasksSucceeded = false
                 if (failedResults.isNotEmpty()) {
                     val accountIdentifier = errorAccountIdentifier(account)
                     log("正在保存出错账号 $accountIdentifier 的运行日志")
@@ -386,7 +402,7 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                 summaries += "${account.label}: " + results.joinToString { r ->
                     "${r.name}${if (r.ok) "✓" else "✗"}"
                 }
-                if (store.config.first().barkPushEnabled) {
+                if (failedResults.isNotEmpty() && store.config.first().barkPushEnabled) {
                     val accountName = account.label.takeIf { it.isNotBlank() && it != account.username }
                         ?: "账号 ${index + 1}"
                     val body = buildString {
@@ -399,7 +415,7 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                         .replace(account.username.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
                     try {
                         BarkPushClient.send(
-                            title = if (failedResults.isEmpty()) "MAH 单号任务完成" else "MAH 单号任务失败",
+                            title = "MAH 单号任务失败",
                             body = body,
                         )
                         log("Bark 任务结果已推送")
@@ -419,6 +435,31 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                 summaryLines += "邮件未见奖励弹窗，待核实账号：${mailNoRewardAccounts.joinToString("、")}"
             }
             val summary = summaryLines.joinToString("\n")
+            if (loginOnlyId == null && allTasksSucceeded && completedAccounts == accounts.size &&
+                merchantAccounts.isNotEmpty() && store.config.first().barkPushEnabled
+            ) {
+                var merchantBody = "本轮全部任务成功完成\n有人工岛老头的账号：\n" +
+                    merchantAccounts.values.distinct().joinToString("\n")
+                for (account in accounts) {
+                    for (secret in listOf(account.username, account.password).filter { it.isNotEmpty() }) {
+                        merchantBody = merchantBody.replace(secret, "***")
+                    }
+                }
+                try {
+                    val parts = merchantBody.chunked(700)
+                    parts.forEachIndexed { index, body ->
+                        BarkPushClient.send(
+                            title = "MAH 人工岛老头账号" + if (parts.size > 1) "（${index + 1}/${parts.size}）" else "",
+                            body = body,
+                        )
+                    }
+                    log("全部任务成功，Bark 老头账号名单已推送")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    log("Bark 老头账号名单推送失败，账号记录已保留")
+                }
+            }
             if (reportAttachments.isNotEmpty()) {
                 try {
                     reportApi.send(

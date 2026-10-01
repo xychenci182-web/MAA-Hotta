@@ -474,7 +474,7 @@ private fun BarkPushControl(vm: HottaViewModel, enabled: Boolean) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text("Bark 推送", style = MaterialTheme.typography.bodyMedium)
-                Text("单号任务完成或失败时推送结果", color = MahTextMuted, style = MaterialTheme.typography.bodySmall)
+                Text("失败时通知；全部成功后汇总推送老头账号", color = MahTextMuted, style = MaterialTheme.typography.bodySmall)
             }
             Switch(checked = enabled, onCheckedChange = vm::updateBarkPush)
         }
@@ -850,6 +850,30 @@ private fun AccountListCard(
 @Composable
 private fun AccountItem(vm: HottaViewModel, account: GameAccount, running: Boolean) {
     var editing by remember(account.id) { mutableStateOf(false) }
+    var confirmingDelete by remember(account.id) { mutableStateOf(false) }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("删除账号") },
+            text = {
+                val name = account.label.ifBlank { account.username }
+                Text("确定删除账号“$name”吗？删除后需要重新添加。")
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !running,
+                    onClick = {
+                        confirmingDelete = false
+                        if (!running) vm.removeAccount(account.id)
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MahRed),
+                ) { Text("确认删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingDelete = false }) { Text("取消") }
+            },
+        )
+    }
     if (editing) {
         AccountEditDialog(
             account = account,
@@ -905,7 +929,7 @@ private fun AccountItem(vm: HottaViewModel, account: GameAccount, running: Boole
                 Icon(Icons.Default.Edit, "修改")
             }
             IconButton(
-                onClick = { vm.removeAccount(account.id) },
+                onClick = { confirmingDelete = true },
                 enabled = !running,
                 colors = IconButtonDefaults.iconButtonColors(contentColor = MahRed),
             ) {

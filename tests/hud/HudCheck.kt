@@ -32,6 +32,22 @@ fun main() {
  println("PASS line switch cancel height=$height")
  }
  for(name in listOf("main","supply","confirmation","password-submit")) check(lineButton(load("tests/hud/fixtures/$name.png"))==null) { "False line dialog: $name" }
+ val warp=load("tests/hud/fixtures/bygone-warp.png")
+ val warpTemplate=load("app/src/main/assets/templates/bygone_warp_start.png")
+ for(height in listOf(360,720,1080)) {
+ val scaled=Bitmap.createScaledBitmap(warp,warp.width*height/warp.height,height,true)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.findWarpStart(scaled,warpTemplate)!=null)
+ println("PASS warp marker height=$height")
+ }
+ for(name in listOf("main","supply","confirmation","password-submit","bygone-scene","login-failure")) {
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.findWarpStart(load("tests/hud/fixtures/$name.png"),warpTemplate)==null) { "False warp marker $name" }
+ }
+ val skipHit=com.aliothmoon.maahotta.vision.MatchResult(android.graphics.Point(900,20),0.9f)
+ val exitHit=com.aliothmoon.maahotta.vision.MatchResult(android.graphics.Point(150,40),0.9f)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(skipHit,exitHit)==null)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(null,null)==null)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(skipHit,null)==skipHit)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(null,exitHit)==exitHit)
  val original=load("tests/hud/fixtures/main.png")
  for(h in listOf(360,720,1080)) {
  val frame=Bitmap.createScaledBitmap(original,h*16/9,h,true)

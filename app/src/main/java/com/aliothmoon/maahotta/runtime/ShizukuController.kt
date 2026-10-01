@@ -108,7 +108,7 @@ class ShizukuController : DeviceController {
     }
 
     override suspend fun launchApp(packageName: String, forceStop: Boolean): Boolean {
-        if (forceStop) forceStop(packageName)
+        if (forceStop && !forceStop(packageName)) return false
         val result = svc()?.exec("monkey -p $packageName -c android.intent.category.LAUNCHER 1")
         delay(1500)
         return result != null && !result.startsWith("ERR:")

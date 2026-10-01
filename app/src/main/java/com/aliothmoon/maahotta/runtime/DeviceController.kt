@@ -82,7 +82,7 @@ class CompositeController(
     override fun activeWindowClassName(): String? = accessibility.activeWindowClassName()
 
     override suspend fun launchApp(packageName: String, forceStop: Boolean): Boolean {
-        if (forceStop) forceStop(packageName)
+        if (forceStop && !forceStop(packageName)) return false
         return shizuku.launchApp(packageName, false) || accessibility.launchApp(packageName, false)
     }
 

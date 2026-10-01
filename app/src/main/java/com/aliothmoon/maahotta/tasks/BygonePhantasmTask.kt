@@ -21,6 +21,8 @@ class BygonePhantasmTask : GameTask {
             ?: return TaskResult(title, false, "潜入按钮模板未载入")
         val skipTemplate = ctx.templates.get("bygone_skip")
             ?: return TaskResult(title, false, "旧日幻想动画跳过模板未载入")
+        val warpStartTemplate = ctx.templates.get("bygone_warp_start")
+            ?: return TaskResult(title, false, "旧日幻想跃迁启动模板未载入")
         val exitIconTemplate = ctx.templates.get("bygone_exit_icon")
             ?: return TaskResult(title, false, "副本退出图标模板未载入")
         val exitDialogTemplate = ctx.templates.get("bygone_exit_dialog")
@@ -70,17 +72,21 @@ class BygonePhantasmTask : GameTask {
             ctx.log("识别到潜入按钮，点击进入副本")
             ctx.device.tap(diveNext.point.x, diveNext.point.y)
 
-            waitThroughEntryAnimation(
+            val firstExit = waitThroughEntryAnimation(
                 ctx = ctx,
                 skipTemplate = skipTemplate,
                 diveNextTemplate = diveNextTemplate,
                 exitIconTemplate = exitIconTemplate,
+                warpStartTemplate = warpStartTemplate,
                 timeoutMs = 45_000,
-            ) ?: return stopAfterDive(ctx, "点击潜入后等待动画结束，仍未识别到左上角退出图标")
-            ctx.log("已进入旧日幻想副本，开始重新定位退出图标")
+            ) ?: return stopAfterDive(ctx, "潜入后未完成跃迁启动及跳过/退出唯一性验证")
+            ctx.log("退出点击第 1/3 次：已识别退出图标，立即点击 (${firstExit.point.x}, ${firstExit.point.y})")
+            ctx.device.tap(firstExit.point.x, firstExit.point.y)
 
-            var confirm: MatchResult? = null
-            for (exitAttempt in 1..3) {
+            var confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
+            for (exitAttempt in 2..3) {
+                if (confirm != null) break
+                ctx.log("未出现退出确认弹窗，重新截图识别退出图标（第 $exitAttempt/3 次）")
                 // Inspect both states in the same fresh screenshot. Never reuse an
                 // old exit coordinate, or click through a partially loaded dialog.
                 var dialogVisible = false
@@ -89,7 +95,9 @@ class BygonePhantasmTask : GameTask {
                     if (dialogVisible) {
                         BygoneScreenDetector.findExitConfirm(screen, confirmTemplate)
                     } else {
-                        BygoneScreenDetector.findExitIcon(screen, exitIconTemplate)
+                        val skip = BygoneScreenDetector.findSkip(screen, skipTemplate)
+                        val exit = BygoneScreenDetector.findExitIcon(screen, exitIconTemplate)
+                        if (skip == null) BygoneScreenDetector.exclusiveEntryAction(skip, exit) else null
                     }
                 }
                 if (target == null) {
@@ -148,14 +156,17 @@ class BygonePhantasmTask : GameTask {
         val skip: MatchResult? = null,
         val dive: MatchResult? = null,
         val exit: MatchResult? = null,
+        val warpStarted: Boolean = false,
     )
 
-    /** Read the possible animation states from one screenshot, in action priority order. */
+    /** Read transition or both candidate actions from the same fresh screenshot. */
     private suspend fun readEntryFrame(
         ctx: BotContext,
         skipTemplate: Bitmap,
         diveTemplate: Bitmap,
         exitTemplate: Bitmap,
+        warpTemplate: Bitmap,
+        detectActions: Boolean,
     ): EntryFrame? {
         val screen = ctx.device.screenshot() ?: return null
         try {
@@ -167,19 +178,17 @@ class BygonePhantasmTask : GameTask {
                     (match.point.y.toDouble() * touchSize.y / screen.height).roundToInt(),
                 ),
             )
-            val exit = BygoneScreenDetector.findExitIcon(screen, exitTemplate)
-            if (exit != null) {
-                // The previous floor page has an exit-like mark. An exit is only
-                // actionable when the dive button is absent in this same frame.
+            if (!detectActions) {
                 val dive = BygoneScreenDetector.findDiveNext(screen, diveTemplate)
-                if (dive == null) return EntryFrame(exit = toTouch(exit))
-                val skip = BygoneScreenDetector.findSkip(screen, skipTemplate)
-                return if (skip != null) EntryFrame(skip = toTouch(skip))
-                else EntryFrame(dive = toTouch(dive))
+                return EntryFrame(
+                    dive = toTouch(dive),
+                    warpStarted = dive == null && BygoneScreenDetector.findWarpStart(screen, warpTemplate) != null,
+                )
             }
-            val skip = BygoneScreenDetector.findSkip(screen, skipTemplate)
-            if (skip != null) return EntryFrame(skip = toTouch(skip))
-            return EntryFrame(dive = toTouch(BygoneScreenDetector.findDiveNext(screen, diveTemplate)))
+            return EntryFrame(
+                skip = toTouch(BygoneScreenDetector.findSkip(screen, skipTemplate)),
+                exit = toTouch(BygoneScreenDetector.findExitIcon(screen, exitTemplate)),
+            )
         } finally {
             screen.recycle()
         }
@@ -190,6 +199,7 @@ class BygonePhantasmTask : GameTask {
         skipTemplate: Bitmap,
         diveNextTemplate: Bitmap,
         exitIconTemplate: Bitmap,
+        warpStartTemplate: Bitmap,
         timeoutMs: Long,
     ): MatchResult? {
         val deadline = ctx.deadlineAfter(timeoutMs)
@@ -197,56 +207,59 @@ class BygonePhantasmTask : GameTask {
         var diveTapCount = 1
         var lastSkipTapAt = 0L
         var skipClickCount = 0
-        var exitStreak = 0
-        var naturalWaitLogged = false
+        var warpConfirmed = false
+        var conflictLogged = false
+        var waitingLogged = false
         while (ctx.elapsedRealtime() < deadline) {
             val roundStartedAt = ctx.elapsedRealtime()
-            val frame = readEntryFrame(ctx, skipTemplate, diveNextTemplate, exitIconTemplate)
+            val frame = readEntryFrame(ctx, skipTemplate, diveNextTemplate, exitIconTemplate,
+                warpStartTemplate, detectActions = warpConfirmed)
             val now = ctx.elapsedRealtime()
-            val sinceDiveTap = now - lastDiveTapAt
-            when {
-                frame?.skip != null -> {
-                    exitStreak = 0
+            if (!warpConfirmed) {
+                if (frame?.warpStarted == true) {
+                    warpConfirmed = true
+                    ctx.log("潜入按钮已消失，识别到跃迁装置正在启动；进入旧日幻想环节，等待3秒")
+                    delay(3_000)
+                    ctx.log("等待结束，开始互斥识别跳过与退出图标")
+                    continue
+                }
+                if (frame?.dive != null && now - lastDiveTapAt >= 1_800) {
+                    if (diveTapCount >= 3) {
+                        ctx.log("多次点击潜入按钮后仍停留在原页面")
+                        return null
+                    }
+                    diveTapCount++
+                    ctx.log("潜入按钮仍在，重新识别并点击")
+                    ctx.device.tap(frame.dive.point.x, frame.dive.point.y)
+                    lastDiveTapAt = ctx.elapsedRealtime()
+                }
+            } else if (frame != null) {
+                val action = BygoneScreenDetector.exclusiveEntryAction(frame.skip, frame.exit)
+                if (frame.skip != null && frame.exit != null) {
+                    if (!conflictLogged) ctx.log("跳过和退出同时命中，拒绝点击，重新截图确认唯一按钮")
+                    conflictLogged = true
+                } else if (action != null) {
+                    conflictLogged = false
+                    if (frame.exit != null) {
+                        ctx.log("仅识别到退出图标，已确认进入旧日幻想，开始退出")
+                        return action
+                    }
                     if (skipClickCount == 0 || now - lastSkipTapAt >= 700) {
                         if (skipClickCount >= 3) {
                             ctx.log("多次点击跳过后动画按钮仍在")
                             return null
                         }
                         skipClickCount++
-                        ctx.log("识别到旧日幻想动画跳过按钮，点击跳过")
-                        ctx.device.tap(frame.skip.point.x, frame.skip.point.y)
+                        ctx.log("仅识别到跳过按钮，已确认进入旧日幻想，点击跳过")
+                        ctx.device.tap(action.point.x, action.point.y)
                         lastSkipTapAt = ctx.elapsedRealtime()
                     }
+                } else if (!waitingLogged) {
+                    ctx.log("暂未识别到唯一的跳过或退出图标，继续等待")
+                    waitingLogged = true
                 }
-                frame?.dive != null -> {
-                    exitStreak = 0
-                    if (sinceDiveTap >= 1_800) {
-                        if (diveTapCount >= 3) {
-                            ctx.log("多次点击潜入按钮后仍停留在原页面")
-                            return null
-                        }
-                        diveTapCount++
-                        ctx.log("潜入按钮仍在，重新识别并点击")
-                        ctx.device.tap(frame.dive.point.x, frame.dive.point.y)
-                        lastDiveTapAt = ctx.elapsedRealtime()
-                    }
-                }
-                frame?.exit != null -> {
-                    // The floor page can contain an exit-like mark. Require two
-                    // different polling frames after the dive button vanishes.
-                    exitStreak++
-                    if (exitStreak >= 2) {
-                        ctx.log("已确认潜入按钮消失，退出图标连续识别成功")
-                        return frame.exit
-                    }
-                }
-                else -> exitStreak = 0
             }
 
-            if (skipClickCount == 0 && !naturalWaitLogged && sinceDiveTap >= 8_000) {
-                ctx.log("暂未出现跳过或退出图标，继续观察动画")
-                naturalWaitLogged = true
-            }
             val remaining = 350 - (ctx.elapsedRealtime() - roundStartedAt)
             if (remaining > 0 && ctx.elapsedRealtime() < deadline) delay(remaining)
         }
