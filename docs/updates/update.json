@@ -1,7 +1,7 @@
 {
-    "versionCode":  3,
-    "versionName":  "0.2.1",
-    "apkUrl":  "https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.1/mah.apk",
-    "sha256":  "ecaea48d9a49570527b2d99055606aed234610e3db63bc87ca529a07f56e927d",
-    "notes":  "Update channel test build"
+    "versionCode":  4,
+    "versionName":  "0.2.2",
+    "apkUrl":  "https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.2/mah.apk",
+    "sha256":  "76150a8ce745b856a8bb23da1b29245d4997728af927784540f6a51cb05509c9",
+    "notes":  "Latest fixes for tasks and device control"
 }
