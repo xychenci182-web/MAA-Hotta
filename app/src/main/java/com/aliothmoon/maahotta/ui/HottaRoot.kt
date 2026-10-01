@@ -126,6 +126,35 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     TASK("任务", Icons.Default.TaskAlt),
 }
 
+private data class ControlPermissionStatus(
+    val checked: Boolean = false,
+    val accessibilityEnabled: Boolean = false,
+    val accessibilityConnected: Boolean = false,
+    val shizukuAuthorized: Boolean = false,
+)
+
+@Composable
+private fun rememberControlPermissionStatus(): ControlPermissionStatus {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf(ControlPermissionStatus()) }
+    LaunchedEffect(context) {
+        // Give services time to reconnect when the activity starts.
+        kotlinx.coroutines.delay(1_000)
+        while (true) {
+            status = ControlPermissionStatus(
+                checked = true,
+                accessibilityEnabled = HottaAccessibilityService.isEnabled(context),
+                accessibilityConnected = HottaAccessibilityService.isConnected(),
+                shizukuAuthorized = runCatching {
+                    Shizuku.pingBinder() && Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+                }.getOrDefault(false),
+            )
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+    return status
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HottaRoot(
@@ -133,8 +162,14 @@ fun HottaRoot(
     vm: HottaViewModel = viewModel(),
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    var showAccessibilityPrompt by remember {
-        mutableStateOf(!HottaAccessibilityService.isConnected())
+    val controlPermissions = rememberControlPermissionStatus()
+    var accessibilityPromptChecked by remember { mutableStateOf(false) }
+    var showAccessibilityPrompt by remember { mutableStateOf(false) }
+    LaunchedEffect(controlPermissions) {
+        if (controlPermissions.checked && !accessibilityPromptChecked) {
+            accessibilityPromptChecked = true
+            showAccessibilityPrompt = !controlPermissions.accessibilityEnabled && !controlPermissions.shizukuAuthorized
+        }
     }
     val run by vm.run.collectAsState()
     val compactHeight = LocalConfiguration.current.screenHeightDp < 500
@@ -173,11 +208,11 @@ fun HottaRoot(
             }
         }
     }
-    if (showAccessibilityPrompt && !HottaAccessibilityService.isConnected()) {
+    if (showAccessibilityPrompt && !controlPermissions.accessibilityEnabled && !controlPermissions.shizukuAuthorized) {
         AlertDialog(
             onDismissRequest = { showAccessibilityPrompt = false },
             title = { Text("先开启无障碍服务") },
-            text = { Text("运行前需要用无障碍服务获取游戏画面并点击。请在系统设置中开启 MAH 的无障碍服务，返回后再开始任务。") },
+            text = { Text("当前未开启 MAH 无障碍服务，Shizuku 也未授权可用。请开启无障碍服务或授权 Shizuku 后再开始任务。") },
             confirmButton = {
                 TextButton(onClick = {
                     showAccessibilityPrompt = false
@@ -292,8 +327,9 @@ private fun StatusPill(text: String, active: Boolean) {
 private fun RunPane(vm: HottaViewModel, run: RunUiState) {
     val config by vm.config.collectAsState()
     val overlayOk = Settings.canDrawOverlays(LocalContext.current)
-    val accessibilityOk = HottaAccessibilityService.isConnected()
-    val shizukuOk = Shizuku.pingBinder()
+    val permissions = rememberControlPermissionStatus()
+    val accessibilityOk = permissions.accessibilityConnected
+    val shizukuOk = permissions.shizukuAuthorized
     val enabledAccounts = config.accounts.count { it.enabled }
     val enabledTasks = config.options.orderedDailyTasks().count { config.options.isEnabled(it) } +
         if (config.options.login) 1 else 0
@@ -314,6 +350,7 @@ private fun RunPane(vm: HottaViewModel, run: RunUiState) {
                     run = run,
                     overlayOk = overlayOk,
                     accessibilityOk = accessibilityOk,
+                    accessibilityEnabled = permissions.accessibilityEnabled,
                     shizukuOk = shizukuOk,
                     enabledAccounts = enabledAccounts,
                     enabledTasks = enabledTasks,
@@ -334,6 +371,7 @@ private fun RunPane(vm: HottaViewModel, run: RunUiState) {
                     run = run,
                     overlayOk = overlayOk,
                     accessibilityOk = accessibilityOk,
+                    accessibilityEnabled = permissions.accessibilityEnabled,
                     shizukuOk = shizukuOk,
                     enabledAccounts = enabledAccounts,
                     enabledTasks = enabledTasks,
@@ -354,6 +392,7 @@ private fun RunControlCard(
     run: RunUiState,
     overlayOk: Boolean,
     accessibilityOk: Boolean,
+    accessibilityEnabled: Boolean,
     shizukuOk: Boolean,
     enabledAccounts: Int,
     enabledTasks: Int,
@@ -404,7 +443,8 @@ private fun RunControlCard(
         }
 
         Spacer(Modifier.height(12.dp))
-        EnvironmentRow("无障碍服务", accessibilityOk, Icons.Default.SettingsAccessibility)
+        EnvironmentRow("无障碍服务", accessibilityOk, Icons.Default.SettingsAccessibility,
+            statusText = if (accessibilityOk) "已就绪" else if (accessibilityEnabled) "已开启，等待连接" else "未开启")
         EnvironmentRow("Shizuku", shizukuOk, Icons.Default.WifiTethering)
         EnvironmentRow("悬浮窗权限", overlayOk, Icons.Default.Tune)
 
@@ -587,7 +627,7 @@ private fun MetricTile(label: String, value: String, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun EnvironmentRow(label: String, ready: Boolean, icon: ImageVector) {
+private fun EnvironmentRow(label: String, ready: Boolean, icon: ImageVector, statusText: String? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -596,7 +636,7 @@ private fun EnvironmentRow(label: String, ready: Boolean, icon: ImageVector) {
         Spacer(Modifier.width(9.dp))
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text(
-            if (ready) "已就绪" else "未连接",
+            statusText ?: if (ready) "已就绪" else "未连接",
             color = if (ready) MahGreen else MahGold,
             style = MaterialTheme.typography.labelMedium,
         )

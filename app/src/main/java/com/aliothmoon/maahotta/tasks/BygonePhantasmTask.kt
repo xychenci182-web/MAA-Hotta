@@ -180,9 +180,12 @@ class BygonePhantasmTask : GameTask {
             )
             if (!detectActions) {
                 val dive = BygoneScreenDetector.findDiveNext(screen, diveTemplate)
+                if (dive != null) return EntryFrame(dive = toTouch(dive))
+                val warpStarted = BygoneScreenDetector.findWarpStart(screen, warpTemplate) != null
                 return EntryFrame(
-                    dive = toTouch(dive),
-                    warpStarted = dive == null && BygoneScreenDetector.findWarpStart(screen, warpTemplate) != null,
+                    warpStarted = warpStarted,
+                    skip = if (warpStarted) null else toTouch(BygoneScreenDetector.findSkip(screen, skipTemplate)),
+                    exit = if (warpStarted) null else toTouch(BygoneScreenDetector.findExitIcon(screen, exitTemplate)),
                 )
             }
             return EntryFrame(
@@ -222,6 +225,16 @@ class BygonePhantasmTask : GameTask {
                     delay(3_000)
                     ctx.log("等待结束，开始互斥识别跳过与退出图标")
                     continue
+                }
+                if (frame != null && frame.dive == null && frame.exit != null &&
+                    BygoneScreenDetector.exclusiveEntryAction(frame.skip, frame.exit) != null
+                ) {
+                    ctx.log("潜入按钮已消失，未捕获跃迁提示但唯一识别到退出图标，直接执行退出")
+                    return frame.exit
+                }
+                if (frame?.skip != null && frame.exit != null && !conflictLogged) {
+                    ctx.log("跃迁提示未捕获，跳过与退出同时命中，拒绝点击并继续识别")
+                    conflictLogged = true
                 }
                 if (frame?.dive != null && now - lastDiveTapAt >= 1_800) {
                     if (diveTapCount >= 3) {

@@ -319,6 +319,17 @@ class HottaAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        fun isEnabled(context: android.content.Context): Boolean {
+            if (isConnected()) return true
+            val enabled = android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            ) ?: return false
+            val expected = android.content.ComponentName(context, HottaAccessibilityService::class.java)
+            return enabled.split(':').any {
+                android.content.ComponentName.unflattenFromString(it) == expected
+            }
+        }
         val instance = AtomicReference<HottaAccessibilityService?>()
         fun isConnected(): Boolean = instance.get() != null
     }
