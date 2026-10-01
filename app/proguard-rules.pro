@@ -1,0 +1,2 @@
+-keep class com.aliothmoon.maahotta.runtime.ShellUserService { *; }
+-keep class com.aliothmoon.maahotta.runtime.IShellService { *; }

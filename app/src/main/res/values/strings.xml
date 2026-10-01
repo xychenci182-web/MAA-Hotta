@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">MAH</string>
+    <string name="accessibility_label">MAH 手势服务</string>
+    <string name="accessibility_desc">用于截图、点击和输入账号，仅在你启动日常任务时工作。</string>
+    <string name="channel_overlay">任务控制</string>
+    <string name="channel_keep_alive">后台保活</string>
+</resources>
