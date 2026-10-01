@@ -1,34 +1,26 @@
-# App 内更新
+# App 鍐呮洿鏂?
+杩愯鎺у埗涓偣鍑烩€滄鏌ユ洿鏂扳€濓紝濉啓 HTTPS 鏇存柊璇存槑鍦板潃銆備繚瀛樺苟妫€鏌ュ悗锛屽彲鏌ョ湅鏂扮増鏈鏄庛€佷笅杞姐€佹牎楠屽苟鐐瑰嚮瀹夎銆傞娆″畨瑁呴渶瑕佸湪绯荤粺璁剧疆鍏佽姝ゅ簲鐢ㄥ畨瑁呮湭鐭ユ潵婧愬簲鐢紝鐒跺悗杩斿洖鍐嶆鐐瑰嚮瀹夎銆傛洿鏂拌鐩栧畨瑁咃紝璐﹀彿閰嶇疆淇濈暀锛涗笉瑕佸厛鍗歌浇鏃х増銆?
+褰撳墠鐗堟湰涓?0.2.0锛寁ersionCode 涓?2銆傛棫鐗堥娆￠渶鎵嬪姩瀹夎鏈増锛屼箣鍚庢墠鑳戒娇鐢ㄥ唴缃洿鏂般€?
+## GitHub 鎵樼鍦板潃锛堝綋鍓嶏級
 
-运行控制中点击“检查更新”，填写 HTTPS 更新说明地址。保存并检查后，可查看新版本说明、下载、校验并点击安装。首次安装需要在系统设置允许此应用安装未知来源应用，然后返回再次点击安装。更新覆盖安装，账号配置保留；不要先卸载旧版。
+- 妫€鏌ユ洿鏂板湴鍧€锛堝浐瀹氾級锛歚https://xychenci182-web.github.io/MAA-Hotta/update.json`
+- APK 涓嬭浇锛堝甫鐗堟湰鍙凤級锛歚https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.1/mah.apk`
+- 浠撳簱锛歚https://github.com/xychenci182-web/MAA-Hotta`
 
-当前版本为 0.2.0，versionCode 为 2。旧版首次需手动安装本版，之后才能使用内置更新。
-
-## GitHub 托管地址（当前）
-
-- 检查更新地址（固定）：`https://xychenci182-web.github.io/MAA-Hotta/update.json`
-- APK 下载（带版本号）：`https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.0/mah.apk`
-- 仓库：`https://github.com/xychenci182-web/MAA-Hotta`
-
-在 App 里把更新说明填成上面的固定 `update.json` 地址即可。
-
-## 发布下一版
-
-1. 修改 `app/build.gradle.kts`：递增 versionCode，更新 versionName。
-2. 使用同一签名密钥构建 APK。当前安装包是 Debug 签名，后续须保留同一台构建机器的 debug.keystore；换签名不能直接覆盖。
-3. 构建成功后生成发布文件（把版本号改成新的）：
+鍦?App 閲屾妸鏇存柊璇存槑濉垚涓婇潰鐨勫浐瀹?`update.json` 鍦板潃鍗冲彲銆?
+## 鍙戝竷涓嬩竴鐗?
+1. 淇敼 `app/build.gradle.kts`锛氶€掑 versionCode锛屾洿鏂?versionName銆?2. 浣跨敤鍚屼竴绛惧悕瀵嗛挜鏋勫缓 APK銆傚綋鍓嶅畨瑁呭寘鏄?Debug 绛惧悕锛屽悗缁』淇濈暀鍚屼竴鍙版瀯寤烘満鍣ㄧ殑 debug.keystore锛涙崲绛惧悕涓嶈兘鐩存帴瑕嗙洊銆?3. 鏋勫缓鎴愬姛鍚庣敓鎴愬彂甯冩枃浠讹紙鎶婄増鏈彿鏀规垚鏂扮殑锛夛細
 
 ```powershell
-.\tools\prepare-update.ps1 -ApkUrl 'https://github.com/xychenci182-web/MAA-Hotta/releases/download/vX.Y.Z/mah.apk' -Notes '本次更新说明'
+.\tools\prepare-update.ps1 -ApkUrl 'https://github.com/xychenci182-web/MAA-Hotta/releases/download/vX.Y.Z/mah.apk' -Notes '鏈鏇存柊璇存槑'
 ```
 
-4. 上传安装包到 GitHub Release：
-
+4. 涓婁紶瀹夎鍖呭埌 GitHub Release锛?
 ```powershell
-gh release create vX.Y.Z dist/update/mah.apk --title "vX.Y.Z" --notes "本次更新说明"
+gh release create vX.Y.Z dist/update/mah.apk --title "vX.Y.Z" --notes "鏈鏇存柊璇存槑"
 ```
 
-5. 覆盖固定更新说明并推送：
+5. 瑕嗙洊鍥哄畾鏇存柊璇存槑骞舵帹閫侊細
 
 ```powershell
 Copy-Item dist/update/update.json docs/updates/update.json -Force
@@ -37,8 +29,6 @@ git commit --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>" -m "Bump 
 git push
 ```
 
-6. 在 App 中配置固定更新说明地址，点击检查更新。
-
-更新说明包含 versionCode、versionName、apkUrl、sha256、notes。脚本从 APK 构建元数据提取版本并计算 SHA-256，避免手填错误。App 拒绝非 HTTPS、降级、包名不符、哈希不符和签名不同的安装包。安装操作通过 Android 系统安装器由用户确认。
-
-下载失败可以重新下载；进程被系统终止后需重新检查和下载，不提供断点续传或静默安装。
+6. 鍦?App 涓厤缃浐瀹氭洿鏂拌鏄庡湴鍧€锛岀偣鍑绘鏌ユ洿鏂般€?
+鏇存柊璇存槑鍖呭惈 versionCode銆乿ersionName銆乤pkUrl銆乻ha256銆乶otes銆傝剼鏈粠 APK 鏋勫缓鍏冩暟鎹彁鍙栫増鏈苟璁＄畻 SHA-256锛岄伩鍏嶆墜濉敊璇€侫pp 鎷掔粷闈?HTTPS銆侀檷绾с€佸寘鍚嶄笉绗︺€佸搱甯屼笉绗﹀拰绛惧悕涓嶅悓鐨勫畨瑁呭寘銆傚畨瑁呮搷浣滈€氳繃 Android 绯荤粺瀹夎鍣ㄧ敱鐢ㄦ埛纭銆?
+涓嬭浇澶辫触鍙互閲嶆柊涓嬭浇锛涜繘绋嬭绯荤粺缁堟鍚庨渶閲嶆柊妫€鏌ュ拰涓嬭浇锛屼笉鎻愪緵鏂偣缁紶鎴栭潤榛樺畨瑁呫€
