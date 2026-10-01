@@ -95,6 +95,7 @@ data class AppConfig(
     val autoStartSchedule: AutoStartSchedule = AutoStartSchedule(),
     val keepAliveEnabled: Boolean = true,
     val barkPushEnabled: Boolean = false,
+    val barkDeviceKey: String = "",
     val updateUrl: String = "",
     val stopOnFailure: Boolean = false,
     val bundledAccountsVersion: Int = 0,

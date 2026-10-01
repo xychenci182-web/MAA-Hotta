@@ -48,6 +48,18 @@ fun main() {
  check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(null,null)==null)
  check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(skipHit,null)==skipHit)
  check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.exclusiveEntryAction(null,exitHit)==exitHit)
+ val sceneTimer=load("app/src/main/assets/templates/bygone_scene_timer.png")
+ for(name in listOf("bygone-fixed-exit", "bygone-scene")) {
+ val frame=load("tests/hud/fixtures/$name.png")
+ for(height in listOf(360,720,1080)) {
+ val scaled=Bitmap.createScaledBitmap(frame,frame.width*height/frame.height,height,true)
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.findSceneTimer(scaled,sceneTimer)!=null) { "No scene timer: $name at $height" }
+ }
+ println("PASS scene timer $name")
+ }
+ for(name in listOf("main", "main-wide", "supply", "confirmation", "password-submit", "bygone-warp", "login-failure")) {
+ check(com.aliothmoon.maahotta.vision.BygoneScreenDetector.findSceneTimer(load("tests/hud/fixtures/$name.png"),sceneTimer)==null) { "False scene timer: $name" }
+ }
  val original=load("tests/hud/fixtures/main.png")
  for(h in listOf(360,720,1080)) {
  val frame=Bitmap.createScaledBitmap(original,h*16/9,h,true)

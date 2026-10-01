@@ -17,6 +17,10 @@ object BygoneScreenDetector {
     fun findWarpStart(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, warpStartRegion, 0.78f)
 
+    /** Fixed clock glyph beside the instance countdown; digits are excluded. */
+    fun findSceneTimer(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, SearchRegion(0.025f, 0.045f, 0.12f, 0.13f), 0.78f)
+
     fun exclusiveEntryAction(skip: MatchResult?, exit: MatchResult?): MatchResult? =
         if ((skip != null) == (exit != null)) null else skip ?: exit
 

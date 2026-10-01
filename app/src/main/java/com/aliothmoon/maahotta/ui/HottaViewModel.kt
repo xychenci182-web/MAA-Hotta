@@ -136,6 +136,12 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun updateBarkDeviceKey(value: String) {
+        viewModelScope.launch {
+            store.update { it.copy(barkDeviceKey = value.trim()) }
+        }
+    }
+
     fun updateKeepAlive(enabled: Boolean) {
         viewModelScope.launch {
             store.update { it.copy(keepAliveEnabled = enabled) }
@@ -402,7 +408,8 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                 summaries += "${account.label}: " + results.joinToString { r ->
                     "${r.name}${if (r.ok) "✓" else "✗"}"
                 }
-                if (failedResults.isNotEmpty() && store.config.first().barkPushEnabled) {
+                val barkConfig = store.config.first()
+                if (failedResults.isNotEmpty() && barkConfig.barkPushEnabled) {
                     val accountName = account.label.takeIf { it.isNotBlank() && it != account.username }
                         ?: "账号 ${index + 1}"
                     val body = buildString {
@@ -413,16 +420,22 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }.replace(account.password.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
                         .replace(account.username.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
-                    try {
-                        BarkPushClient.send(
-                            title = "MAH 单号任务失败",
-                            body = body,
-                        )
-                        log("Bark 任务结果已推送")
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        log("Bark 推送失败，请检查网络和推送地址；任务结果已保留")
+                    val barkKey = BarkPushClient.normalizeDeviceKey(barkConfig.barkDeviceKey)
+                    if (barkKey.isBlank()) {
+                        log("Bark 已开启但未填写推送地址，跳过推送")
+                    } else {
+                        try {
+                            BarkPushClient.send(
+                                deviceKey = barkKey,
+                                title = "MAH 单号任务失败",
+                                body = body,
+                            )
+                            log("Bark 任务结果已推送")
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            log("Bark 推送失败，请检查网络和推送地址；任务结果已保留")
+                        }
                     }
                 }
                 if (failedResults.isEmpty()) {
@@ -435,8 +448,9 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                 summaryLines += "邮件未见奖励弹窗，待核实账号：${mailNoRewardAccounts.joinToString("、")}"
             }
             val summary = summaryLines.joinToString("\n")
+            val endBarkConfig = store.config.first()
             if (loginOnlyId == null && allTasksSucceeded && completedAccounts == accounts.size &&
-                merchantAccounts.isNotEmpty() && store.config.first().barkPushEnabled
+                merchantAccounts.isNotEmpty() && endBarkConfig.barkPushEnabled
             ) {
                 var merchantBody = "本轮全部任务成功完成\n有人工岛老头的账号：\n" +
                     merchantAccounts.values.distinct().joinToString("\n")
@@ -445,19 +459,25 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                         merchantBody = merchantBody.replace(secret, "***")
                     }
                 }
-                try {
-                    val parts = merchantBody.chunked(700)
-                    parts.forEachIndexed { index, body ->
-                        BarkPushClient.send(
-                            title = "MAH 人工岛老头账号" + if (parts.size > 1) "（${index + 1}/${parts.size}）" else "",
-                            body = body,
-                        )
+                val barkKey = BarkPushClient.normalizeDeviceKey(endBarkConfig.barkDeviceKey)
+                if (barkKey.isBlank()) {
+                    log("Bark 已开启但未填写推送地址，跳过老头账号名单推送")
+                } else {
+                    try {
+                        val parts = merchantBody.chunked(700)
+                        parts.forEachIndexed { index, body ->
+                            BarkPushClient.send(
+                                deviceKey = barkKey,
+                                title = "MAH 人工岛老头账号" + if (parts.size > 1) "（${index + 1}/${parts.size}）" else "",
+                                body = body,
+                            )
+                        }
+                        log("全部任务成功，Bark 老头账号名单已推送")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        log("Bark 老头账号名单推送失败，账号记录已保留")
                     }
-                    log("全部任务成功，Bark 老头账号名单已推送")
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    log("Bark 老头账号名单推送失败，账号记录已保留")
                 }
             }
             if (reportAttachments.isNotEmpty()) {

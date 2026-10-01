@@ -8,9 +8,20 @@ import org.json.JSONObject
 
 /** Sends short task results only; local diagnostic files stay on the device. */
 object BarkPushClient {
-    suspend fun send(title: String, body: String) = withContext(Dispatchers.IO) {
+    private val keyFromUrl = Regex("""(?i)^https?://api\.day\.app/([^/?#\s]+)/?$""")
+
+    fun normalizeDeviceKey(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        return keyFromUrl.matchEntire(trimmed)?.groupValues?.get(1)?.trim().orEmpty()
+            .ifEmpty { trimmed.trimEnd('/') }
+    }
+
+    suspend fun send(deviceKey: String, title: String, body: String) = withContext(Dispatchers.IO) {
+        val key = normalizeDeviceKey(deviceKey)
+        require(key.isNotBlank()) { "未填写 Bark 推送地址" }
         val payload = JSONObject()
-            .put("device_key", "[REDACTED]")
+            .put("device_key", key)
             .put("title", title.take(80))
             .put("body", body.take(800))
             .put("group", "MAH任务结果")

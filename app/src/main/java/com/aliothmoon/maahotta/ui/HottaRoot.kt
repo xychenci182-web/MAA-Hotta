@@ -357,6 +357,7 @@ private fun RunPane(vm: HottaViewModel, run: RunUiState) {
                     schedule = config.autoStartSchedule,
                     keepAliveEnabled = config.keepAliveEnabled,
                     barkPushEnabled = config.barkPushEnabled,
+                    barkDeviceKey = config.barkDeviceKey,
                     modifier = Modifier.weight(0.48f).fillMaxHeight(),
                 )
                 LogCard(run, Modifier.weight(0.52f).fillMaxHeight())
@@ -378,6 +379,7 @@ private fun RunPane(vm: HottaViewModel, run: RunUiState) {
                     schedule = config.autoStartSchedule,
                     keepAliveEnabled = config.keepAliveEnabled,
                     barkPushEnabled = config.barkPushEnabled,
+                    barkDeviceKey = config.barkDeviceKey,
                     modifier = Modifier.fillMaxWidth().height(stackedControlHeight),
                 )
                 LogCard(run, Modifier.fillMaxWidth().weight(1f))
@@ -399,6 +401,7 @@ private fun RunControlCard(
     schedule: AutoStartSchedule,
     keepAliveEnabled: Boolean,
     barkPushEnabled: Boolean,
+    barkDeviceKey: String,
     modifier: Modifier = Modifier,
 ) {
     ConsoleCard(modifier, scrollable = true) {
@@ -478,7 +481,7 @@ private fun RunControlCard(
         KeepAliveControl(vm, keepAliveEnabled)
 
         Spacer(Modifier.height(8.dp))
-        BarkPushControl(vm, barkPushEnabled)
+        BarkPushControl(vm, barkPushEnabled, barkDeviceKey)
         Spacer(Modifier.height(8.dp))
         AppUpdateControl(run.running)
 
@@ -501,22 +504,35 @@ private fun RunControlCard(
 }
 
 @Composable
-private fun BarkPushControl(vm: HottaViewModel, enabled: Boolean) {
+private fun BarkPushControl(vm: HottaViewModel, enabled: Boolean, deviceKey: String) {
     Surface(
         color = MahSurfaceHigh,
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, MahOutline.copy(alpha = 0.55f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Bark 推送", style = MaterialTheme.typography.bodyMedium)
-                Text("失败时通知；全部成功后汇总推送老头账号", color = MahTextMuted, style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Bark 推送", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "失败时通知；全部成功后汇总推送老头账号。地址仅保存在本机。",
+                        color = MahTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = vm::updateBarkPush)
             }
-            Switch(checked = enabled, onCheckedChange = vm::updateBarkPush)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = deviceKey,
+                onValueChange = vm::updateBarkDeviceKey,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = enabled,
+                label = { Text("Bark 推送地址 / Device Key") },
+                placeholder = { Text("https://api.day.app/你的Key 或直接填 Key") },
+            )
         }
     }
 }
