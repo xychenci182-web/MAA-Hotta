@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$ApkUrl,
-    [string]$Notes = "修复问题并优化任务流程",
+    [string]$Notes = "Bug fixes and task flow improvements",
     [string]$OutputDirectory = "dist/update"
 )
 $ErrorActionPreference = 'Stop'
