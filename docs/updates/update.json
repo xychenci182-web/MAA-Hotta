@@ -1,7 +1,7 @@
 {
-    "versionCode":  6,
-    "versionName":  "0.2.4",
-    "apkUrl":  "https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.4/mah.apk",
-    "sha256":  "7f51fb778fccb181940f18ae4314c26db47f96f8d3b59eda7433a4208d43e2f5",
-    "notes":  "Bark key is local-only; previous releases removed"
+    "versionCode":  7,
+    "versionName":  "0.2.5",
+    "apkUrl":  "https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.5/mah.apk",
+    "sha256":  "da94511c4883dae331762e6080349b1e1405796c7db7aeda4b40d7868e2a5019",
+    "notes":  "Navigation policy and task flow updates"
 }
