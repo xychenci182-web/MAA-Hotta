@@ -19,7 +19,7 @@ class WeekdayTask(
         if (today !in weekdays) {
             val day = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")[today - 1]
             ctx.log("$title 未设置在${day}执行，跳过本次任务")
-            return TaskResult(title, true, "${day}未设置执行，已跳过")
+            return TaskResult.skipped(title, "${day}未设置执行，已跳过")
         }
         return delegate.run(ctx)
     }

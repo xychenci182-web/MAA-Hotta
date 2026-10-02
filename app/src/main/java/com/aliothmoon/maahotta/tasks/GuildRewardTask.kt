@@ -58,28 +58,14 @@ class GuildRewardTask : GameTask {
             if (index in claimedIndices) {
                 return stopUncertain(ctx, "第 ${index + 1} 个奖励红点在领取后重新出现")
             }
-            var updatedDots: BooleanArray? = null
-            for (attempt in 1..2) {
-                ctx.log(
-                    if (attempt == 1) "点击第 ${index + 1} 个带红点的公会奖励"
-                    else "已确认第 ${index + 1} 个红点仍在，重新点击",
-                )
-                ctx.tap(rewardPoints[index], 0)
-                updatedDots = waitForRewardDotGone(ctx, rewardsRow, index, 2_000)
-                if (updatedDots != null) break
-
-                // A missing reward row could mean a popup or a page transition.
-                // Only tap again when the same dot is still on the rewards page.
-                val refreshed = currentRewardDots(ctx, rewardsRow)
-                    ?: return stopUncertain(ctx, "点击第 ${index + 1} 个奖励后无法确认仍在公会奖励页")
-                if (!refreshed[index]) {
-                    updatedDots = refreshed
-                    break
-                }
-            }
+            ctx.log("领取第 ${index + 1} 个带红点的公会奖励一次，等待红点消失")
+            ctx.markActionSubmitted("$id:claim_${index + 1}")
+            ctx.tap(rewardPoints[index], 0)
+            val updatedDots = waitForRewardDotGone(ctx, rewardsRow, index, 8_000)
             if (updatedDots == null) {
-                return stopUncertain(ctx, "第 ${index + 1} 个奖励点击后红点仍在")
+                return stopUncertain(ctx, "第 ${index + 1} 个奖励领取结果无法确认，不重复领取")
             }
+            ctx.confirmActionResult()
             claimed++
             claimedIndices += index
             currentDots = requireNotNull(updatedDots)
@@ -159,7 +145,7 @@ class GuildRewardTask : GameTask {
                 val latestDots = GuildScreenDetector.rewardRedDots(screen)
                 if (!latestDots[index]) {
                     dots = latestDots
-                    return@waitUntil detectedRow
+                    return@waitUntil detectedRow.copy(requiresStableFrames = true)
                 }
             }
             null
@@ -175,7 +161,7 @@ class GuildRewardTask : GameTask {
     private suspend fun stopUncertain(ctx: BotContext, detail: String): TaskResult {
         ctx.log("$detail，停止后续任务并保存当前画面")
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 
     private suspend fun waitForInfoTab(ctx: BotContext, template: Bitmap, timeoutMs: Long): MatchResult? =

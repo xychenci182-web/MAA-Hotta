@@ -50,6 +50,7 @@ internal object TaskNavigationMachine {
         var recoveryUsed = false
         val attempts = mutableMapOf<Pair<PageState, NavigationAction>, Int>()
         while (ctx.elapsedRealtime() < deadline) {
+            val observationStartedAt = ctx.elapsedRealtime()
             val page = observe(ctx)
             val menu = page.controls["menu"]
             val previousMenu = previous?.controls?.get("menu")
@@ -60,7 +61,7 @@ internal object TaskNavigationMachine {
             stable = if (same) stable + 1 else 1
             previous = page
             if (page.state != lastLogged) {
-                ctx.log("状态识别：${page.state.label}，导航目标：$goal")
+                ctx.log("状态识别：${page.state.label}，导航目标：$goal，识别耗时=${ctx.elapsedRealtime() - observationStartedAt}ms")
                 lastLogged = page.state
             }
             val action = NavigationPolicy.next(page.state, goal)
@@ -75,7 +76,7 @@ internal object TaskNavigationMachine {
                 delay(400)
                 continue
             }
-            val requiredFrames = if (page.state in setOf(PageState.HUD, PageState.MENU, PageState.BYGONE_SCENE)) 3 else 2
+            val requiredFrames = NavigationPolicy.requiredFrames(page.state, action)
             if (stable < requiredFrames) { delay(350); continue }
             if (action == NavigationAction.READY) {
                 ctx.log("状态确认：${page.state.label}，复用当前页面")
@@ -143,7 +144,7 @@ internal object TaskNavigationMachine {
                 val slots = if (action == NavigationAction.OPEN_GIFT) 4 else 2
                 val x = (anchor.point.x - slots * 57f * size.y / 720).toInt()
                 if (x !in 0 until size.x) return false
-                ctx.log("${page.state.label} → $action，使用本帧菜单锚点")
+                ctx.log("${page.state.label} → $action，菜单锚点 (${anchor.point.x},${anchor.point.y})，向左${slots}格，点击 ($x,${anchor.point.y})")
                 ctx.device.tap(x, anchor.point.y)
                 true
             }

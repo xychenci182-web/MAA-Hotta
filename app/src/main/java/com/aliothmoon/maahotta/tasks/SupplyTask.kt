@@ -103,11 +103,9 @@ class SupplyTask : GameTask {
             if (!entered) return TaskResult(title, false, "$lastFailure；已重试3次")
         }
 
-        val cumulativeAlreadyClaimed = ctx.waitUntil(1_500, 350) { screen ->
-            if (SupplyScreenDetector.isCumulativeClaimed(screen)) center(screen) else null
-        } != null
-        if (cumulativeAlreadyClaimed) {
-            ctx.log("识别到累计奖励已领取，直接判定执行供给完成")
+        val allAlreadyClaimed = waitForStableEvidence(ctx, 1_500, SupplyScreenDetector::isAllClaimed)
+        if (allAlreadyClaimed) {
+            ctx.log("连续确认全部 DAY 和累计奖励已领取，执行供给完成")
             return finish(ctx, true, "累计奖励已领取，执行供给已完成")
         }
 
@@ -116,41 +114,37 @@ class SupplyTask : GameTask {
             val size = ctx.device.screenSize()
             SupplyScreenDetector.dayNumberAt(size.x, size.y, it.point.x)
         }
-        if (claim != null) {
+        val verifiedDay = if (claim != null) {
             val xRatio = claim.point.x.toFloat() / ctx.device.screenSize().x
-            var claimButton = claim!!
-            var claimed = false
-            repeat(3) { attempt ->
-                if (!claimed) {
-                    ctx.log(
-                        if (attempt == 0) "找到黄色高亮的供给奖励，点击领取"
-                        else "供给奖励仍可领取，重新识别后再次点击",
-                    )
-                    ctx.device.tap(claimButton.point.x, claimButton.point.y)
-                    claimed = ctx.waitUntil(5_000, 400) { screen ->
-                        if (SupplyScreenDetector.isClaimed(screen, xRatio) &&
-                            SupplyScreenDetector.findClaimable(screen) == null
-                        ) center(screen) else null
-                    } != null
-                    if (!claimed) {
-                        val refreshed = ctx.waitUntil(1_500, 350, SupplyScreenDetector::findClaimable)
-                        if (refreshed != null) claimButton = refreshed
-                    }
-                }
+            ctx.log("找到黄色高亮的供给奖励，点击领取一次并等待结果")
+            ctx.markActionSubmitted("${id}_day_claim")
+            ctx.device.tap(claim.point.x, claim.point.y)
+            val day = waitForClaimedDay(ctx, claimDay, xRatio)
+                ?: return stopUncertain(ctx, "点击后未连续确认供给已领取，不重复提交领取")
+            ctx.confirmActionResult()
+            day
+        } else {
+            // A checked earlier DAY does not prove today's reward was claimed.
+            // Only completion of all seven DAY cards is enough to proceed without
+            // observing a claimable card or a result from our own claim action.
+            val allDaysClaimed = waitForStableEvidence(ctx, 2_000) { screen ->
+                SupplyScreenDetector.isAllDayRewardsClaimed(screen) &&
+                    SupplyScreenDetector.findClaimable(screen) == null
             }
-            if (!claimed) return stopUncertain(ctx, "点击后未确认供给已领取")
+            if (!allDaysClaimed) {
+                return stopUncertain(ctx, "未识别到黄色供给奖励，也未确认全部 DAY 已领取，今日结果不明")
+            }
+            ctx.log("连续确认全部七个 DAY 已领取，继续检查累计奖励")
+            7
         }
 
-        val verifiedDay = claimDay ?: detectLastClaimedDay(ctx)
         if (verifiedDay == 7) {
             ctx.log("已确认 DAY 7，等待右侧累计奖励解锁")
             val cumulative = ctx.waitUntil(12_000, 400) { screen ->
                 SupplyScreenDetector.findCumulativeClaimable(screen)
             }
             if (cumulative == null) {
-                val alreadyClaimed = ctx.waitUntil(1_500, 350) { screen ->
-                    if (SupplyScreenDetector.isCumulativeClaimed(screen)) center(screen) else null
-                } != null
+                val alreadyClaimed = waitForStableEvidence(ctx, 1_500, SupplyScreenDetector::isAllClaimed)
                 if (alreadyClaimed) {
                     ctx.log("DAY 7 累计奖励已经领取")
                     return finish(ctx, true, "累计奖励已领取")
@@ -158,37 +152,17 @@ class SupplyTask : GameTask {
                 return stopUncertain(ctx, "DAY 7 已领取，但等待后累计奖励仍未解锁")
             }
 
-            var cumulativeButton = cumulative!!
-            var cumulativeClaimed = false
-            repeat(3) { attempt ->
-                if (!cumulativeClaimed) {
-                    ctx.log(
-                        if (attempt == 0) "DAY 7 累计奖励已解锁，点击领取"
-                        else "累计奖励仍可领取，重新识别后再次点击",
-                    )
-                    ctx.device.tap(cumulativeButton.point.x, cumulativeButton.point.y)
-                    cumulativeClaimed = ctx.waitUntil(5_000, 400) { screen ->
-                        if (SupplyScreenDetector.isCumulativeClaimed(screen)) center(screen) else null
-                    } != null
-                    if (!cumulativeClaimed) {
-                        val refreshed = ctx.waitUntil(1_500, 350) { screen ->
-                            SupplyScreenDetector.findCumulativeClaimable(screen)
-                        }
-                        if (refreshed != null) cumulativeButton = refreshed
-                    }
-                }
-            }
-            if (!cumulativeClaimed) return stopUncertain(ctx, "点击后未确认 DAY 7 累计奖励已领取")
+            ctx.log("DAY 7 累计奖励已解锁，点击领取一次并等待结果")
+            ctx.markActionSubmitted("${id}_cumulative_claim")
+            ctx.device.tap(cumulative.point.x, cumulative.point.y)
+            val cumulativeClaimed = waitForStableEvidence(ctx, 5_000, SupplyScreenDetector::isAllClaimed)
+            if (!cumulativeClaimed) return stopUncertain(ctx, "点击后未连续确认 DAY 7 累计奖励已领取，不重复提交领取")
+            ctx.confirmActionResult()
             ctx.log("执行供给已经领取到 DAY 7，累计奖励已完成")
             return finish(ctx, true, "累计奖励已领取")
         }
 
-        if (claim != null) {
-            logClaimedDay(ctx, verifiedDay)
-            return finish(ctx, true, "今日供给已领取")
-        }
-        ctx.log("未识别到黄色供给奖励，按今日已领取处理")
-        logClaimedDay(ctx, verifiedDay)
+        ctx.log("执行供给已经领取到 DAY $verifiedDay")
         return finish(ctx, true, "今日供给已领取")
     }
 
@@ -227,7 +201,7 @@ class SupplyTask : GameTask {
     private suspend fun stopUncertain(ctx: BotContext, detail: String): TaskResult {
         ctx.log("$detail，停止后续任务并保存当前画面")
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 
     private suspend fun returnToGame(ctx: BotContext): Boolean {
@@ -245,30 +219,32 @@ class SupplyTask : GameTask {
     private suspend fun isGameHud(ctx: BotContext): Boolean =
         GameHudNavigator.ensurePlainHud(ctx)
 
-    private suspend fun detectLastClaimedDay(ctx: BotContext): Int? {
-        var detected: Int? = null
-        for (attempt in 0 until 3) {
-            val screen = ctx.device.screenshot()
-            if (screen != null) {
-                detected = try {
-                    SupplyScreenDetector.lastClaimedDay(screen)
-                } finally {
-                    screen.recycle()
-                }
-                if (detected != null) break
-            }
-            if (attempt < 2) delay(350)
-        }
-        return detected
-    }
+    private suspend fun waitForStableEvidence(
+        ctx: BotContext,
+        timeoutMs: Long,
+        condition: (Bitmap) -> Boolean,
+    ): Boolean = ctx.waitUntil(timeoutMs, 350) { screen ->
+        if (condition(screen)) center(screen).copy(requiresStableFrames = true) else null
+    } != null
 
-    private suspend fun logClaimedDay(ctx: BotContext, fallback: Int? = null) {
-        val day = detectLastClaimedDay(ctx) ?: fallback
-        if (day != null) {
-            ctx.log("执行供给已经领取到 DAY $day")
-        } else {
-            ctx.log("执行供给今日已领取，未识别到具体 DAY")
-        }
+    private suspend fun waitForClaimedDay(ctx: BotContext, expectedDay: Int?, xRatio: Float): Int? {
+        var observedDay: Int? = null
+        val confirmed = ctx.waitUntil(8_000, 350) { screen ->
+            val day = SupplyScreenDetector.lastClaimedDay(screen)
+                ?.takeIf { it in 1..7 && (expectedDay == null || it == expectedDay) }
+            if (day == null || !SupplyScreenDetector.isClaimed(screen, xRatio) ||
+                SupplyScreenDetector.findClaimable(screen) != null
+            ) {
+                observedDay = null
+                null
+            } else if (observedDay != day) {
+                observedDay = day
+                null
+            } else {
+                center(screen).copy(requiresStableFrames = true)
+            }
+        } != null
+        return observedDay.takeIf { confirmed }
     }
 
     private suspend fun openSupplyFromSpecialAction(ctx: BotContext): Boolean {

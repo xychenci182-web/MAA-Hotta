@@ -72,66 +72,55 @@ class CheckInTask(
         val claim = when (val state = waitForClaimState(ctx)) {
             is ClaimState.Available -> state.point
             ClaimState.AlreadyClaimed -> {
-                ctx.log("未看到可领取高亮，连续两帧识别到已领取对勾，今日已签到")
-                return finish(ctx, true, "今日已签到")
+                ctx.log("连续确认全部七日签到对勾，本轮签到奖励已全部领取")
+                return finish(ctx, true, "七日签到奖励已全部领取")
+                    .let { if (it.ok) it.copy(outcome = com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED) else it }
             }
-            null -> return failUnknown(ctx, "签到页奖励状态无法确认")
+            null -> return failUnknown(ctx, "签到页未确认可领取高亮；历史对勾不能证明今日已签到，结果不明")
         }
         val rewardPopupTemplate = ctx.templates.get("mail_reward_popup")
-        var claimPoint = claim
-        var xRatio = claimPoint.x.toFloat() / ctx.device.screenSize().x
-        repeat(3) { attempt ->
-            ctx.log(if (attempt == 0) "找到黄色高亮的签到奖励，点击领取"
-                else "奖励仍可领取，重新识别后再次点击")
-            ctx.device.tap(claimPoint.x, claimPoint.y)
-            var popupVisible = false
-            val changed = ctx.waitUntil(4_000, 500) { screen ->
-                if (isRewardPopup(screen, rewardPopupTemplate)) {
-                    popupVisible = true
-                    center(screen)
-                } else if (CheckInScreenDetector.isSignInPage(screen) &&
-                    CheckInScreenDetector.hasClaimCheck(screen, xRatio) &&
-                    CheckInScreenDetector.findClaimable(screen) == null
-                ) center(screen) else null
+        val xRatio = claim.x.toFloat() / ctx.device.screenSize().x
+        ctx.log("找到黄色高亮的签到奖励，领取一次并等待明确结果")
+        ctx.markActionSubmitted("$id:claim_reward")
+        ctx.device.tap(claim.x, claim.y)
+        var popupVisible = false
+        val changed = ctx.waitUntil(12_000, 500) { screen ->
+            if (isRewardPopup(screen, rewardPopupTemplate)) {
+                popupVisible = true
+                center(screen)
+            } else if (CheckInScreenDetector.isSignInPage(screen) &&
+                CheckInScreenDetector.hasClaimCheck(screen, xRatio) &&
+                CheckInScreenDetector.findClaimable(screen) == null
+            ) {
+                center(screen).copy(requiresStableFrames = true)
+            } else {
+                null
             }
-            if (changed != null) {
-                if (!popupVisible) return finish(ctx, true, "已领取签到奖励")
-                if (closeRewardPopup(ctx, rewardPopupTemplate, xRatio)) {
-                    return finish(ctx, true, "已领取并关闭奖励弹窗")
-                }
-                return failUnknown(ctx, "奖励弹窗未能关闭并确认对勾")
-            }
-            val refreshed = ctx.waitUntil(1_200, 500) { screen ->
-                if (CheckInScreenDetector.isSignInPage(screen))
-                    CheckInScreenDetector.findClaimable(screen) else null
-            } ?: return failUnknown(ctx, "点击签到奖励后状态没有变化，且未找到可重试的卡片")
-            claimPoint = refreshed.point
-            xRatio = claimPoint.x.toFloat() / ctx.device.screenSize().x
         }
-        return failUnknown(ctx, "多次点击后仍无法确认签到奖励")
+        if (changed == null) return failUnknown(ctx, "点击签到奖励后结果无法确认，不重复领取")
+        if (popupVisible && !closeRewardPopup(ctx, rewardPopupTemplate, xRatio)) {
+            return failUnknown(ctx, "奖励弹窗未能关闭并确认对勾")
+        }
+        ctx.confirmActionResult()
+        return finish(ctx, true, if (popupVisible) "已领取并关闭奖励弹窗" else "已领取签到奖励")
     }
 
     private suspend fun waitForClaimState(ctx: BotContext): ClaimState? {
-        var stableClaimedFrames = 0
         var alreadyClaimed = false
         val found = ctx.waitUntil(2_500, 500) { screen ->
+            alreadyClaimed = false
             if (!CheckInScreenDetector.isSignInPage(screen)) {
-                stableClaimedFrames = 0
                 return@waitUntil null
             }
             val available = CheckInScreenDetector.findClaimable(screen)
             if (available != null) return@waitUntil available
             if (CheckInScreenDetector.hasPossibleClaimable(screen) ||
-                !CheckInScreenDetector.hasAnyClaimCheck(screen)
+                !CheckInScreenDetector.hasAllClaimChecks(screen)
             ) {
-                stableClaimedFrames = 0
                 return@waitUntil null
             }
-            stableClaimedFrames++
-            if (stableClaimedFrames >= 2) {
-                alreadyClaimed = true
-                center(screen)
-            } else null
+            alreadyClaimed = true
+            center(screen).copy(requiresStableFrames = true)
         } ?: return null
         return if (alreadyClaimed) ClaimState.AlreadyClaimed else ClaimState.Available(found.point)
     }
@@ -146,7 +135,11 @@ class CheckInTask(
                         CheckInScreenDetector.isSignInPage(screen) &&
                         CheckInScreenDetector.hasClaimCheck(screen, xRatio) &&
                         CheckInScreenDetector.findClaimable(screen) == null
-                    ) center(screen) else null
+                    ) {
+                        center(screen).copy(requiresStableFrames = true)
+                    } else {
+                        null
+                    }
                 } != null
             ) return true
         }
@@ -156,7 +149,7 @@ class CheckInTask(
     private suspend fun failUnknown(ctx: BotContext, reason: String): TaskResult {
         ctx.log(reason)
         ctx.saveTaskDiagnostic("check_in")
-        return TaskResult(title, false, reason, retryable = false)
+        return TaskResult.uncertain(title, reason)
     }
 
     private fun center(screen: Bitmap): MatchResult =

@@ -6,6 +6,11 @@ import kotlin.math.roundToInt
 
 /** Recognizes the pale bottom navigation shared by all Welfare pages. */
 object WelfareNavigationDetector {
+    /** The pale bottom row alone is not a page identity; other game pages also have one. */
+    fun hasPageTitle(screen: Bitmap, template: Bitmap?): Boolean = template != null &&
+        TemplateMatcher.match(screen, template, threshold = 0.82f, step = 2,
+            region = SearchRegion(0.03f, 0f, 0.28f, 0.13f), referenceHeight = 528) != null
+
     fun hasBottomNavigation(screen: Bitmap): Boolean {
         if (screen.width < 320 || screen.height < 240) return false
         val pixels = IntArray(screen.width * screen.height)

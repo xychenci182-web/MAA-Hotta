@@ -5,6 +5,21 @@ import kotlin.math.roundToInt
 
 /** Recognizes the shared Must-do hub used by MIA Kitchen and Dimension Trials. */
 object RequiredHubScreenDetector {
+    /** Two distinct fixed left tabs establish the hub, even if its bottom strip is pale. */
+    fun hasMultipleTabs(screen: Bitmap, template: (String) -> Bitmap?): Boolean {
+        var hits = 0
+        val finders = listOf<Pair<String, (Bitmap, Bitmap?) -> MatchResult?>>(
+            "hub_weekly_tab" to ::findWeeklyTab,
+            "hub_recommend_tab" to ::findRecommendTab,
+            "hub_leisure_tab" to ::findLeisureTab,
+            "hub_challenge_tab" to ::findChallengeTab,
+        )
+        for ((name, find) in finders) {
+            if (find(screen, template(name)) != null && ++hits >= 2) return true
+        }
+        return false
+    }
+
     private val weeklyRegion = SearchRegion(0.02f, 0.10f, 0.13f, 0.27f)
     private val recommendRegion = SearchRegion(0.02f, 0.23f, 0.13f, 0.43f)
     private val leisureRegion = SearchRegion(0.02f, 0.38f, 0.13f, 0.59f)

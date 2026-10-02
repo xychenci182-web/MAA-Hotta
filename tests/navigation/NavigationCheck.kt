@@ -21,6 +21,51 @@ fun main() {
         println("STATE $name: ${result.state}")
         check(result.state == expected) { "$name expected $expected but ${result.state}" }
     }
+    // Regression: the first welfare destination frame must complete navigation even
+    // when opening the gift consumed the previous confirmation/time budget.
+    val supplyFrame = Bitmap(ImageIO.read(File("tests/hud/fixtures/supply.png")))
+    var templateLookups = 0
+    val welfarePage = PageStateDetector.inspect(supplyFrame, { templateLookups++; template(it) }, hud)
+    check(welfarePage.state == PageState.SUPPLY)
+    check(templateLookups == 1) { "Welfare fast path should inspect its title only; looked up $templateLookups templates" }
+    val welfareAction = NavigationPolicy.next(welfarePage.state, NavigationGoal.WELFARE)
+    check(welfareAction == NavigationAction.READY)
+    check(NavigationPolicy.requiredFrames(welfarePage.state, welfareAction) == 1)
+    check(NavigationPolicy.requiredFrames(PageState.WELFARE, NavigationAction.READY) == 1)
+    check(NavigationPolicy.requiredFrames(PageState.HUD, NavigationAction.READY) == 3)
+    check(NavigationPolicy.requiredFrames(PageState.MENU, NavigationAction.OPEN_GUILD) == 3)
+    check(NavigationPolicy.requiredFrames(PageState.BYGONE_SCENE, NavigationAction.EXIT_BYGONE) == 3)
+    println("PASS first welfare destination frame completes; no unrelated template scans")
+    // Regression: a shared pale bottom strip cannot override the hub's left tab evidence.
+    val hubImage = java.awt.image.BufferedImage(1280,720,java.awt.image.BufferedImage.TYPE_INT_ARGB)
+    val hubGraphics = hubImage.createGraphics()
+    hubGraphics.color = java.awt.Color(18,30,46)
+    hubGraphics.fillRect(0,0,1280,720)
+    hubGraphics.color = java.awt.Color(220,220,220)
+    hubGraphics.fillRect(0,648,1280,72)
+    for ((name,y) in listOf("hub_weekly_tab" to 0.18f,"hub_recommend_tab" to 0.33f)) {
+        val original = template(name)!!
+        val scaled = Bitmap.createScaledBitmap(original,original.width*720/596,original.height*720/596,true)
+        hubGraphics.drawImage(scaled.image,(1280*0.075f).toInt()-scaled.width/2,
+            (720*y).toInt()-scaled.height/2,null)
+    }
+    hubGraphics.dispose()
+    val hubFrame = Bitmap(hubImage)
+    check(WelfareNavigationDetector.hasBottomNavigation(hubFrame))
+    val hubState = PageStateDetector.inspect(hubFrame,::template,hud).state
+    println("PALE HUB classified: $hubState; tab evidence=${RequiredHubScreenDetector.hasMultipleTabs(hubFrame,::template)}")
+    check(hubState == PageState.HUB)
+    check(!WelfareNavigationDetector.hasPageTitle(hubFrame,template("welfare_page_title")))
+    check(WelfareNavigationDetector.hasPageTitle(supplyFrame,template("welfare_page_title")))
+    val genericImage = java.awt.image.BufferedImage(1280,720,java.awt.image.BufferedImage.TYPE_INT_ARGB)
+    val genericGraphics = genericImage.createGraphics()
+    genericGraphics.color = java.awt.Color(18,30,46)
+    genericGraphics.fillRect(0,0,1280,720)
+    genericGraphics.color = java.awt.Color(220,220,220)
+    genericGraphics.fillRect(0,648,1280,72)
+    genericGraphics.dispose()
+    check(PageStateDetector.inspect(Bitmap(genericImage),::template,hud).state == PageState.UNKNOWN)
+    println("PASS pale-bottom hub is HUB; unlabelled pale-bottom screen stays UNKNOWN")
     val menuImage = java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_ARGB)
     val menuGraphics = menuImage.createGraphics()
     menuGraphics.color = java.awt.Color(18, 30, 46)

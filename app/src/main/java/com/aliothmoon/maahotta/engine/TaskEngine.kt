@@ -19,6 +19,7 @@ import com.aliothmoon.maahotta.vision.RewardRecoveryDetector
 import com.aliothmoon.maahotta.tasks.TaskNavigationMachine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
@@ -31,15 +32,103 @@ class BotContext(
     device: DeviceController,
     val templates: TemplateStore,
     val log: (String) -> Unit,
+    private val journal: RunJournal? = null,
+    private val redact: (String) -> String = { it },
 ) {
+    val safety = TaskSafetyState()
+    val accountSession = AccountSession()
+    private var accountId: String? = null
+
+    fun beginAccount(id: String) {
+        accountId = id
+        journal?.record("account_started", accountId = id)
+    }
+
+    fun beginTask(id: String) {
+        safety.beginTask(id)
+        record("task_started")
+    }
+
+    fun markActionSubmitted(stepId: String) {
+        safety.submit(stepId)
+        record("action_submitted", stepId = stepId)
+    }
+
+    fun confirmActionResult() {
+        record("action_confirmed", stepId = safety.pendingStepId)
+        safety.confirm()
+    }
+
+    fun confirmAccountIdentity(id: String) {
+        journal?.record("account_verified", accountId = id)
+        accountSession.verify(id)
+    }
+
+    fun invalidateAccountIdentity() {
+        accountSession.invalidate()
+        record("account_invalidated")
+    }
+
+    fun finishTask(result: TaskResult) {
+        record("task_finished", detail = result.detail, outcome = result.outcome.name)
+    }
+
+    private fun record(event: String, stepId: String? = null, detail: String = "", outcome: String? = null, screenshotPath: String? = null) {
+        journal?.record(event, accountId = accountId, taskId = safety.taskId, stepId = stepId,
+            detail = redact(detail), outcome = outcome, screenshotPath = screenshotPath)
+    }
+
     /** Set by the engine: successful tasks leave their verified page for the next state transition. */
     var preserveTaskPage: Boolean = false
     private val rawDevice = device
     // All task screenshots pass through the highest-priority popup handler.
     val device: DeviceController = object : DeviceController by rawDevice {
+        // Synchronous backends may not suspend before sending an input; reject cancelled runs here.
+        override suspend fun tap(x: Int, y: Int, holdMs: Long) {
+            currentCoroutineContext().ensureActive()
+            rawDevice.tap(x, y, holdMs)
+        }
+
+        override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) {
+            currentCoroutineContext().ensureActive()
+            rawDevice.swipe(x1, y1, x2, y2, durationMs)
+        }
+
+        override suspend fun inputText(text: String): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.inputText(text)
+        }
+
+        override suspend fun clickView(viewIdSuffix: String): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.clickView(viewIdSuffix)
+        }
+
+        override suspend fun clickText(text: String): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.clickText(text)
+        }
+
+        override suspend fun setViewText(viewIdSuffix: String, text: String): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.setViewText(viewIdSuffix, text)
+        }
+
+        override suspend fun launchApp(packageName: String, forceStop: Boolean): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.launchApp(packageName, forceStop)
+        }
+
+        override suspend fun forceStop(packageName: String): Boolean {
+            currentCoroutineContext().ensureActive()
+            return rawDevice.forceStop(packageName)
+        }
+
         override suspend fun screenshot(): Bitmap? {
+            currentCoroutineContext().ensureActive()
             var handled = false
             repeat(10) {
+                currentCoroutineContext().ensureActive()
                 val shot = rawDevice.screenshot() ?: return null
                 val visible = try {
                     dismissLineSwitch(shot)
@@ -175,7 +264,7 @@ class BotContext(
                         } == true) {
                         stableHitCount++
                         if (!hit.requiresStableFrames || stableHitCount >= 2) return scaled
-                    } else stableHitCount = 0
+                    } else stableHitCount = 1
                     previousStableHit = scaled
                 } else {
                     previousStableHit = null
@@ -289,16 +378,11 @@ class BotContext(
     suspend fun dismissDisconnectDialog(): Boolean {
         var handled = false
         repeat(8) { attempt ->
-            val shot = device.screenshot() ?: run {
-                return@repeat
-            }
+            val shot = device.screenshot() ?: throw ScreenshotUnavailableException()
             val visible = try {
                 withTimeoutOrNull(6_000) {
-                    ScreenTextFinder.find(shot, listOf("无法连接服务器"))
-                } != null
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                false
+                    ScreenTextFinder.find(shot, listOf("无法连接服务器")) != null
+                } ?: throw IllegalStateException("连接状态识别超时，停止运行")
             } finally {
                 shot.recycle()
             }
@@ -448,6 +532,7 @@ class BotContext(
                 saveHudOverlay(screen, directory, file.nameWithoutExtension)
             }
             log("任务诊断截图：${file.absolutePath}")
+            record("diagnostic_saved", screenshotPath = file.absolutePath)
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             log("保存任务诊断截图失败：${error.message ?: "未知错误"}")
@@ -601,13 +686,6 @@ class BotContext(
     }
 }
 
-data class TaskResult(
-    val name: String,
-    val ok: Boolean,
-    val detail: String = "",
-    val retryable: Boolean = true,
-)
-
 class ScreenshotUnavailableException : IllegalStateException(
     "无法获取屏幕截图，请检查云手机的无障碍截图权限和游戏画面",
 )
@@ -616,26 +694,45 @@ interface GameTask {
     val id: String
     val title: String
     fun shouldNavigate(): Boolean = true
+    fun allowEngineRetry(): Boolean = true
+    fun allowEngineRelogin(): Boolean = true
     suspend fun run(ctx: BotContext): TaskResult
 }
 
 class TaskEngine(
     private val context: BotContext,
+    private val expectedAccountId: String? = null,
     private val relogin: (suspend () -> TaskResult)? = null,
 ) {
     suspend fun runAll(tasks: List<GameTask>): List<TaskResult> {
         context.preserveTaskPage = true
         val out = mutableListOf<TaskResult>()
         for (task in tasks) {
-            var result = TaskResult(task.title, false, "尚未执行")
-            var attempt = 1
-            var reconnectCount = 0
-            while (attempt <= 2) {
-                context.log(
-                    if (attempt == 1) "—— 开始 ${task.title} ——"
-                    else "—— 重试 ${task.title} ——",
-                )
-                result = runCatching {
+            context.beginTask(task.id)
+            val runner = TaskAttemptRunner(
+                safety = context.safety,
+                log = context.log,
+                detectDisconnect = {
+                    context.dismissDisconnectDialog().also { disconnected ->
+                        if (disconnected) context.invalidateAccountIdentity()
+                    }
+                },
+                relogin = relogin?.let { action ->
+                    suspend {
+                        val loginResult = action()
+                        if (loginResult.ok && expectedAccountId != null &&
+                            !context.accountSession.isVerifiedFor(expectedAccountId)) {
+                            TaskResult.uncertain("重新登录", "重新登录后账号身份未确认")
+                        } else loginResult
+                    }
+                },
+                onException = { Timber.e(it, task.id) },
+            )
+            val result = runner.run(task.title, task.allowEngineRetry(), task.allowEngineRelogin()) {
+                if (task.id != "login" && expectedAccountId != null &&
+                    !context.accountSession.isVerifiedFor(expectedAccountId)) {
+                    TaskResult.uncertain(task.title, "当前账号身份未确认，禁止执行任务")
+                } else {
                     // Login launches the game itself; no game window may exist yet.
                     val goal = if (task.shouldNavigate()) TaskNavigationMachine.goalFor(task.id) else null
                     if (goal != null && !TaskNavigationMachine.reach(context, goal)) {
@@ -645,59 +742,13 @@ class TaskEngine(
                         TaskResult(task.title, false, "当前页面无法确认或无法到达任务页面，状态导航已停止")
                     } else task.run(context)
                 }
-                    .getOrElse {
-                        if (it is CancellationException) throw it
-                        Timber.e(it, task.id)
-                        TaskResult(task.title, false, it.message ?: "异常")
-                    }
-
-                if (!result.ok && !result.retryable) break
-
-                if (context.dismissDisconnectDialog()) {
-                    val reloginAction = relogin
-                    if (reconnectCount >= 2 || reloginAction == null) {
-                        result = TaskResult(task.title, false, "掉线后无法继续重新登录")
-                        break
-                    }
-                    reconnectCount++
-                    context.log("掉线弹窗已消失，开始重新登录当前账号")
-                    delay(1_000)
-                    val loginResult = runCatching { reloginAction() }
-                        .getOrElse {
-                            if (it is CancellationException) throw it
-                            Timber.e(it, "relogin")
-                            TaskResult("重新登录", false, it.message ?: "异常")
-                        }
-                    if (!loginResult.ok) {
-                        result = TaskResult(
-                            task.title,
-                            false,
-                            "掉线后重新登录失败：${loginResult.detail}",
-                        )
-                        break
-                    }
-                    if (result.ok) {
-                        context.log("${task.title} 已完成，重新登录后从下一任务继续")
-                        break
-                    }
-                    context.log("重新登录成功，继续执行未完成任务：${task.title}")
-                    continue
-                }
-
-                if (result.ok) break
-                if (attempt == 1) {
-                    context.log("${task.title} 首次执行失败：${result.detail}，等待后重试一次")
-                    delay(1_500)
-                }
-                attempt++
             }
+            context.finishTask(result)
             context.log(if (result.ok) "完成 ${task.title}: ${result.detail}" else "失败 ${task.title}: ${result.detail}")
             out += result
             if (!result.ok) {
                 if (task.id == "login") context.saveLoginDiagnostic()
-                if (task.id == "check_in" && result.retryable) {
-                    context.saveTaskDiagnostic("check_in")
-                }
+                context.saveTaskDiagnostic(task.id)
                 context.log(
                     if (result.retryable) "${task.title} 重试后仍失败，停止后续任务"
                     else "${task.title} 状态无法确认，已停止后续任务",

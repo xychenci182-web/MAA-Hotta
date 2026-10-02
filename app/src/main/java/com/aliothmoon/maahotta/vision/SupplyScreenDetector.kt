@@ -146,9 +146,13 @@ object SupplyScreenDetector {
             findCumulativeClaimable(screen) == null
     }
 
-    fun isAllClaimed(screen: Bitmap): Boolean {
+    fun isAllDayRewardsClaimed(screen: Bitmap): Boolean {
         val days = supplyCenters(screen) ?: return false
-        if (days.any { ratio(screen, it, ::isClaimedGray) <= 0.70f }) return false
-        return isCumulativeClaimed(screen)
+        return days.all {
+            ratio(screen, it, ::isYellow) < 0.10f && ratio(screen, it, ::isClaimedGray) > 0.70f
+        }
     }
+
+    fun isAllClaimed(screen: Bitmap): Boolean =
+        isAllDayRewardsClaimed(screen) && isCumulativeClaimed(screen)
 }

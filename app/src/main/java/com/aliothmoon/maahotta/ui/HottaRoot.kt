@@ -189,7 +189,7 @@ fun HottaRoot(
     ) {
         Scaffold(
             containerColor = Color.Transparent,
-            topBar = { MahHeader(run.running, compactHeight) },
+            topBar = { MahHeader(run.running, compactHeight, run.stopping) },
         ) { padding ->
             Column(
                 modifier = Modifier
@@ -227,7 +227,7 @@ fun HottaRoot(
 }
 
 @Composable
-private fun MahHeader(running: Boolean, compact: Boolean) {
+private fun MahHeader(running: Boolean, compact: Boolean, stopping: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -258,7 +258,7 @@ private fun MahHeader(running: Boolean, compact: Boolean) {
         }
         Spacer(Modifier.weight(1f))
         StatusPill(
-            text = if (running) "任务运行中" else "等待启动",
+            text = if (stopping) "正在停止" else if (running) "任务运行中" else "等待启动",
             active = running,
         )
     }
@@ -335,56 +335,22 @@ private fun RunPane(vm: HottaViewModel, run: RunUiState) {
         if (config.options.login) 1 else 0
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // At 1280×720 / 320 dpi the window is only about 640×360 dp.
-        // A fixed-height control card would otherwise push logs off screen.
-        val wide = maxWidth >= 560.dp
         val compact = maxHeight < 500.dp
-        val stackedControlHeight = minOf(475.dp, maxHeight * 0.52f)
-        if (wide) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(bottom = if (compact) 8.dp else 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp),
-            ) {
-                RunControlCard(
-                    vm = vm,
-                    run = run,
-                    overlayOk = overlayOk,
-                    accessibilityOk = accessibilityOk,
-                    accessibilityEnabled = permissions.accessibilityEnabled,
-                    shizukuOk = shizukuOk,
-                    enabledAccounts = enabledAccounts,
-                    enabledTasks = enabledTasks,
-                    schedule = config.autoStartSchedule,
-                    keepAliveEnabled = config.keepAliveEnabled,
-                    barkPushEnabled = config.barkPushEnabled,
-                    barkDeviceKey = config.barkDeviceKey,
-                    modifier = Modifier.weight(0.48f).fillMaxHeight(),
-                )
-                LogCard(run, Modifier.weight(0.52f).fillMaxHeight())
-            }
-        } else {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(bottom = if (compact) 8.dp else 16.dp),
-                verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp),
-            ) {
-                RunControlCard(
-                    vm = vm,
-                    run = run,
-                    overlayOk = overlayOk,
-                    accessibilityOk = accessibilityOk,
-                    accessibilityEnabled = permissions.accessibilityEnabled,
-                    shizukuOk = shizukuOk,
-                    enabledAccounts = enabledAccounts,
-                    enabledTasks = enabledTasks,
-                    schedule = config.autoStartSchedule,
-                    keepAliveEnabled = config.keepAliveEnabled,
-                    barkPushEnabled = config.barkPushEnabled,
-                    barkDeviceKey = config.barkDeviceKey,
-                    modifier = Modifier.fillMaxWidth().height(stackedControlHeight),
-                )
-                LogCard(run, Modifier.fillMaxWidth().weight(1f))
-            }
-        }
+        RunControlCard(
+            vm = vm,
+            run = run,
+            overlayOk = overlayOk,
+            accessibilityOk = accessibilityOk,
+            accessibilityEnabled = permissions.accessibilityEnabled,
+            shizukuOk = shizukuOk,
+            enabledAccounts = enabledAccounts,
+            enabledTasks = enabledTasks,
+            schedule = config.autoStartSchedule,
+            keepAliveEnabled = config.keepAliveEnabled,
+            barkPushEnabled = config.barkPushEnabled,
+            barkDeviceKey = config.barkDeviceKey,
+            modifier = Modifier.fillMaxSize().padding(bottom = if (compact) 8.dp else 16.dp),
+        )
     }
 }
 
@@ -427,14 +393,14 @@ private fun RunControlCard(
             }
             OutlinedButton(
                 onClick = vm::stop,
-                enabled = run.running,
+                enabled = run.running && !run.stopping,
                 modifier = Modifier.height(48.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MahRed),
                 border = BorderStroke(1.dp, if (run.running) MahRed.copy(alpha = 0.6f) else MahOutline),
             ) {
                 Icon(Icons.Default.Stop, null)
                 Spacer(Modifier.width(5.dp))
-                Text("停止")
+                Text(if (run.stopping) "停止中" else "停止")
             }
         }
         Spacer(Modifier.height(12.dp))

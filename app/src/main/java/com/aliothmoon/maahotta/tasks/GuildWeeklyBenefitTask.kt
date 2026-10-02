@@ -12,6 +12,8 @@ import com.aliothmoon.maahotta.vision.MatchResult
 import com.aliothmoon.maahotta.vision.ScreenTextFinder
 import com.aliothmoon.maahotta.vision.ScreenTextMatch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /** Claims the once-per-week benefit reached from the left-side 福利 tab. */
@@ -35,34 +37,15 @@ class GuildWeeklyBenefitTask(
 
         val claimTarget = findClaimTarget(ctx, openTemplate)
         if (claimTarget == null) {
-            ctx.log("公会福利页未识别到 OPEN 或领取红点，本周奖励已经领取")
-            return finish(ctx, "本周奖励已领取")
+            return stopUncertain(ctx, "公会福利页未识别到 OPEN，缺少本周已领取的正向证据，结果不明")
         }
 
-        var target: Point = requireNotNull(claimTarget)
-        var popup: MatchResult? = null
-        for (attempt in 1..3) {
-            ctx.log(
-                if (attempt == 1) "识别到公会福利 OPEN，点击领取周奖励"
-                else "周奖励弹窗尚未出现，重新识别后再次点击",
-            )
-            ctx.device.tap(target.x, target.y)
-            popup = waitForRewardPopup(ctx, rewardPopup, 4_000)
-            if (popup != null) break
-
-            // The page may still be loading. Re-read the actual control rather
-            // than repeating the previous coordinate.
-            val refreshed = findClaimTarget(ctx, openTemplate)
-            if (refreshed != null) {
-                target = refreshed
-            } else {
-                ctx.log("OPEN 已消失，奖励弹窗可能仍在加载，继续等待")
-                popup = waitForRewardPopup(ctx, rewardPopup, 5_000)
-                break
-            }
-        }
+        ctx.log("识别到公会福利 OPEN，点击领取一次并等待周奖励弹窗")
+        ctx.markActionSubmitted("${id}_claim")
+        ctx.device.tap(claimTarget.x, claimTarget.y)
+        val popup = waitForRewardPopup(ctx, rewardPopup, 12_000)
         if (popup == null) {
-            return stopUncertain(ctx, "点击 OPEN 后未识别到周奖励弹窗")
+            return stopUncertain(ctx, "点击 OPEN 后未识别到周奖励弹窗，不重复提交领取")
         }
 
         var closed = false
@@ -81,11 +64,10 @@ class GuildWeeklyBenefitTask(
             return stopUncertain(ctx, "点击白框外后未确认周奖励弹窗关闭")
         }
 
-        // A successful claim must remove both the OPEN label and its red dot.
-        // Sample multiple frames because the disabled next-week emblem flashes.
-        if (findClaimTarget(ctx, openTemplate) != null) {
-            return stopUncertain(ctx, "关闭弹窗后仍识别到 OPEN")
+        if (!waitForClaimResult(ctx, openTemplate, rewardPopup, 5_000)) {
+            return stopUncertain(ctx, "关闭奖励后未连续确认福利页及 OPEN 消失，领取结果不明")
         }
+        ctx.confirmActionResult()
         return finish(ctx, "周奖励领取成功")
     }
 
@@ -176,7 +158,8 @@ class GuildWeeklyBenefitTask(
                 val height = screen.height
                 val match = try {
                     ScreenTextFinder.find(screen, targets)
-                } catch (_: Throwable) {
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     null
                 } finally {
                     screen.recycle()
@@ -201,7 +184,28 @@ class GuildWeeklyBenefitTask(
         template: Bitmap,
         timeoutMs: Long,
     ): MatchResult? = ctx.waitUntil(timeoutMs, 350) { screen ->
-        GuildScreenDetector.findWeeklyRewardPopup(screen, template)
+        GuildScreenDetector.findWeeklyRewardPopup(screen, template)?.copy(requiresStableFrames = true)
+    }
+
+    private suspend fun waitForClaimResult(ctx: BotContext, open: Bitmap, popup: Bitmap, timeoutMs: Long): Boolean {
+        val deadline = ctx.deadlineAfter(timeoutMs)
+        var confirmedFrames = 0
+        while (ctx.elapsedRealtime() < deadline) {
+            val screen = ctx.device.screenshot()
+            val confirmed = if (screen == null) false else try {
+                val heading = withTimeoutOrNull(2_000) {
+                    ScreenTextFinder.find(screen, listOf("公会福利", "每周一凌晨5点结算福利", "基础福利"))
+                }
+                heading != null && heading.point.x > screen.width * 0.18f &&
+                    heading.point.y < screen.height * 0.82f &&
+                    GuildScreenDetector.findWeeklyOpen(screen, open) == null &&
+                    GuildScreenDetector.findWeeklyRewardPopup(screen, popup) == null
+            } finally { screen.recycle() }
+            confirmedFrames = if (confirmed) confirmedFrames + 1 else 0
+            if (confirmedFrames >= 2) return true
+            delay(350)
+        }
+        return false
     }
 
     private suspend fun waitForPopupGone(
@@ -225,7 +229,7 @@ class GuildWeeklyBenefitTask(
                 } else {
                     consecutiveGone = 0
                 }
-            }
+            } else consecutiveGone = 0
             delay(300)
         }
         return false
@@ -241,6 +245,7 @@ class GuildWeeklyBenefitTask(
             title,
             exited,
             if (exited) "$detail；已退出到游戏主界面" else "$detail；未能退出到游戏主界面",
+            retryable = false,
         )
     }
 
@@ -252,6 +257,6 @@ class GuildWeeklyBenefitTask(
     private suspend fun stopUncertain(ctx: BotContext, detail: String): TaskResult {
         ctx.log("$detail，停止后续任务并保存当前画面")
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 }

@@ -21,6 +21,8 @@ import com.aliothmoon.maahotta.data.TaskErrorReportStore
 import com.aliothmoon.maahotta.data.TaskOptions
 import com.aliothmoon.maahotta.engine.BotContext
 import com.aliothmoon.maahotta.engine.TaskEngine
+import com.aliothmoon.maahotta.engine.RunJournal
+import com.aliothmoon.maahotta.engine.TaskOutcome
 import com.aliothmoon.maahotta.overlay.OverlayService
 import com.aliothmoon.maahotta.scheduler.AutoStartScheduler
 import com.aliothmoon.maahotta.runtime.AccessibilityController
@@ -36,6 +38,7 @@ import com.aliothmoon.maahotta.vision.TemplateStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,9 +47,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
+import java.io.File
+import java.io.IOException
 
 data class RunUiState(
     val running: Boolean = false,
+    val stopping: Boolean = false,
     val backend: String = "检测中",
     val logs: List<String> = emptyList(),
     val lastSummary: String = "",
@@ -191,322 +197,347 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
     fun startLoginOnly(accountId: String) = startRun(loginOnlyId = accountId)
 
     private fun startRun(loginOnlyId: String?, enableAllAccounts: Boolean = false) {
-        if (job?.isActive == true) return
+        if (job?.isCompleted == false) return
         if (config.value.keepAliveEnabled) {
             runCatching { KeepAliveService.start(getApplication()) }
         }
-        val runJob = viewModelScope.launch(Dispatchers.Default) {
-            resetCompleteRunLogs()
-            val reportAttachments = mutableListOf<MahReportAttachment>()
-            fun queueReportAttachment(attachment: MahReportAttachment) {
-                reportAttachments.removeAll {
-                    it.kind == attachment.kind && it.file.absolutePath == attachment.file.absolutePath
+        val runJob = viewModelScope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+            var journal: RunJournal? = null
+            var journalRedact: (String) -> String = { it }
+            try {
+                resetCompleteRunLogs()
+                val reportAttachments = mutableListOf<MahReportAttachment>()
+                fun queueReportAttachment(attachment: MahReportAttachment) {
+                    reportAttachments.removeAll {
+                        it.kind == attachment.kind && it.file.absolutePath == attachment.file.absolutePath
+                    }
+                    reportAttachments += attachment
                 }
-                reportAttachments += attachment
-            }
-            _run.update { it.copy(running = true, logs = emptyList(), lastSummary = "") }
-            if (enableAllAccounts) {
-                store.setAllAccountsEnabled(true)
-                log("定时启动：已自动勾选全部保存账号")
-            }
-            log("后端：${device.backendName()}")
-            if (!HottaAccessibilityService.isConnected() && !shizuku.isReady()) {
-                shizuku.bind()
-            }
-            if (!HottaAccessibilityService.isConnected() && !shizuku.isReady()) {
-                log("请先授权 Shizuku 或开启无障碍")
-                _run.update { it.copy(running = false) }
-                return@launch
-            }
-            val conf = if (enableAllAccounts) store.config.first() else config.value
-            val accounts = if (loginOnlyId == null) {
-                conf.accounts.filter { it.enabled }
-            } else {
-                conf.accounts.filter { it.id == loginOnlyId }
-            }
-            if (accounts.isEmpty()) {
-                log("没有启用的账号")
-                _run.update { it.copy(running = false) }
-                return@launch
-            }
-            val templates = TemplateStore(getApplication())
-            val ctx = BotContext(ReferenceFrameController(device), templates, ::log)
-            val summaries = mutableListOf<String>()
-            val mailNoRewardAccounts = linkedSetOf<String>()
-            val merchantAccounts = linkedMapOf<String, String>()
-            var allTasksSucceeded = true
-            var completedAccounts = 0
-            for ((index, account) in accounts.withIndex()) {
-                val accountLogStart = completeRunLogSize()
-                val engine = TaskEngine(ctx) {
-                    LoginTask(account, launchGame = false).run(ctx)
+                _run.update { it.copy(running = true, stopping = false, logs = emptyList(), lastSummary = "") }
+                if (enableAllAccounts) {
+                    store.setAllAccountsEnabled(true)
+                    log("定时启动：已自动勾选全部保存账号")
                 }
-                log("======== ${account.label} ========")
-                var islandMerchantCheckedThisRun = false
-                var islandMerchantDetectedThisRun = false
-                var islandMerchantRecordedThisRun = false
-                val tasks = if (loginOnlyId == null) {
-                    buildDailyTasks(
-                        account = account,
-                        options = conf.options,
-                        includeLogin = index == 0,
-                        onIslandMerchantDetected = { found ->
-                            islandMerchantCheckedThisRun = true
-                            if (found) {
-                                islandMerchantDetectedThisRun = true
-                                merchantAccounts[account.id] = merchantRecordNote(account)
-                                    ?: account.characterName.takeIf { it.isNotBlank() }
-                                    ?: "账号 ${index + 1}"
-                                val accountNote = merchantRecordNote(account)
-                                if (accountNote != null) {
-                                    val file = islandMerchantRecords.append(accountNote)
-                                    if (file != null) {
-                                        islandMerchantRecordedThisRun = true
-                                        queueReportAttachment(
-                                            MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
-                                        )
-                                        log("老头账号备注已追加：$accountNote")
-                                        log("记录文件：${file.absolutePath}")
-                                    }
-                                }
-                                store.updateAccount(account.id) {
-                                    it.copy(islandMerchantPending = !islandMerchantRecordedThisRun)
-                                }
-                            } else {
-                                merchantAccounts.remove(account.id)
-                                islandMerchantDetectedThisRun = false
-                                store.updateAccount(account.id) {
-                                    it.copy(islandMerchantPending = false)
-                                }
-                            }
-                        },
-                        onMailNoRewardPopup = {
-                            val identifier = errorAccountIdentifier(account)
-                            if (mailNoRewardAccounts.add(identifier)) {
-                                log("账号 $identifier：点击一键领取后未见奖励弹窗，已列入待核实")
-                                try {
-                                    val file = islandMerchantRecords.append("邮件待核实：$identifier")
-                                    if (file != null) {
-                                        queueReportAttachment(
-                                            MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
-                                        )
-                                        log("已与老头账号一起保存：${file.absolutePath}")
-                                    }
-                                } catch (error: Exception) {
-                                    if (error is CancellationException) throw error
-                                    log("邮件待核实记录保存失败：${error.message ?: "未知错误"}；账号仍保留在本次运行汇总中")
-                                }
-                            }
-                        },
-                    )
+                log("后端：${device.backendName()}")
+                if (!HottaAccessibilityService.isConnected() && !shizuku.isReady()) {
+                    shizuku.bind()
+                }
+                if (!HottaAccessibilityService.isConnected() && !shizuku.isReady()) {
+                    log("请先授权 Shizuku 或开启无障碍")
+                    _run.update { it.copy(running = false) }
+                    return@launch
+                }
+                val conf = if (enableAllAccounts) store.config.first() else config.value
+                val accounts = if (loginOnlyId == null) {
+                    conf.accounts.filter { it.enabled }
                 } else {
-                    listOf(LoginTask(account))
+                    conf.accounts.filter { it.id == loginOnlyId }
                 }
-                val results = engine.runAll(tasks).toMutableList()
-                var stopAfterAccount = false
-
-                if (loginOnlyId == null) {
-                    val dailySucceeded = results.all { it.ok }
-                    if (!dailySucceeded) {
-                        log("账号 ${account.label} 有任务重试后仍失败，停止全部运行")
-                        stopAfterAccount = true
-                    } else {
-                        store.updateAccount(account.id) { it.copy(enabled = false) }
-                        log("账号 ${account.label} 的日常已完成，已自动取消勾选")
-                        val nextAccount = accounts.getOrNull(index + 1)
-                        val merchantNeedsRecord = !islandMerchantRecordedThisRun &&
-                            if (islandMerchantCheckedThisRun) {
-                                islandMerchantDetectedThisRun
-                            } else {
-                                account.islandMerchantPending
-                            }
-                        val accountNote = merchantRecordNote(account)
-                        if (merchantNeedsRecord) {
-                            merchantAccounts[account.id] = accountNote
-                                ?: account.characterName.takeIf { it.isNotBlank() }
-                                ?: "账号 ${index + 1}"
-                        }
-                        if (merchantNeedsRecord && accountNote != null) {
-                            val file = islandMerchantRecords.append(accountNote)
-                            if (file != null) {
-                                islandMerchantRecordedThisRun = true
-                                queueReportAttachment(
-                                    MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
-                                )
-                                log("老头账号备注已追加：$accountNote")
-                                log("记录文件：${file.absolutePath}")
-                                store.updateAccount(account.id) {
-                                    it.copy(islandMerchantPending = false)
-                                }
-                            }
-                        }
-                        val captureCharacterName = merchantNeedsRecord &&
-                            !islandMerchantRecordedThisRun
-                        val transition = AccountTransitionTask(
-                            currentAccount = account,
-                            nextAccount = nextAccount,
-                            captureCharacterName = captureCharacterName,
-                            onCharacterName = { characterName ->
-                                val shouldRecord = !islandMerchantRecordedThisRun &&
-                                    (islandMerchantDetectedThisRun || account.islandMerchantPending)
-                                if (shouldRecord) {
-                                    val recordName = merchantRecordNote(account) ?: characterName
-                                    merchantAccounts[account.id] = recordName
-                                    val file = islandMerchantRecords.append(recordName)
-                                    if (file != null) {
-                                        queueReportAttachment(
-                                            MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
-                                        )
-                                        log("老头记录已追加：$recordName")
-                                        log("记录文件：${file.absolutePath}")
+                if (accounts.isEmpty()) {
+                    log("没有启用的账号")
+                    _run.update { it.copy(running = false) }
+                    return@launch
+                }
+                val templates = TemplateStore(getApplication())
+                val savedAccountPhones = conf.accounts.map { it.username }
+                val secrets = accounts.flatMap { listOf(it.username, it.password) }.filter { it.isNotEmpty() }.distinct()
+                journalRedact = { text -> secrets.fold(text) { redacted, secret -> redacted.replace(secret, "***") } }
+                val app = getApplication<Application>()
+                val runJournal = RunJournal(app.getExternalFilesDir("run_records") ?: File(app.filesDir, "run_records"))
+                journal = runJournal
+                runJournal.record("run_started")
+                log("本轮进度记录：${runJournal.file.absolutePath}")
+                val ctx = BotContext(ReferenceFrameController(device), templates, ::log, runJournal, journalRedact)
+                val summaries = mutableListOf<String>()
+                val merchantAccounts = linkedMapOf<String, String>()
+                var allTasksSucceeded = true
+                var completedAccounts = 0
+                for ((index, account) in accounts.withIndex()) {
+                    ctx.beginAccount(account.id)
+                    val accountLogStart = completeRunLogSize()
+                    val engine = TaskEngine(ctx, expectedAccountId = account.id) {
+                        LoginTask(account, launchGame = false, savedAccountPhones = savedAccountPhones).run(ctx)
+                    }
+                    log("======== ${account.label} ========")
+                    var islandMerchantCheckedThisRun = false
+                    var islandMerchantDetectedThisRun = false
+                    var islandMerchantRecordedThisRun = false
+                    val tasks = if (loginOnlyId == null) {
+                        val dailyTasks = buildDailyTasks(
+                            account = account,
+                            options = conf.options,
+                            includeLogin = index == 0,
+                            savedAccountPhones = savedAccountPhones,
+                            onIslandMerchantDetected = { found ->
+                                islandMerchantCheckedThisRun = true
+                                if (found) {
+                                    islandMerchantDetectedThisRun = true
+                                    merchantAccounts[account.id] = merchantRecordNote(account)
+                                        ?: account.characterName.takeIf { it.isNotBlank() }
+                                        ?: "账号 ${index + 1}"
+                                    val accountNote = merchantRecordNote(account)
+                                    if (accountNote != null) {
+                                        val file = islandMerchantRecords.append(accountNote)
+                                        if (file != null) {
+                                            islandMerchantRecordedThisRun = true
+                                            queueReportAttachment(
+                                                MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
+                                            )
+                                            log("老头账号备注已追加：$accountNote")
+                                            log("记录文件：${file.absolutePath}")
+                                        }
                                     }
-                                }
-                                store.updateAccount(account.id) {
-                                    it.copy(
-                                        characterName = characterName,
-                                        islandMerchantPending = false,
-                                    )
+                                    store.updateAccount(account.id) {
+                                        it.copy(islandMerchantPending = !islandMerchantRecordedThisRun)
+                                    }
+                                } else {
+                                    merchantAccounts.remove(account.id)
+                                    islandMerchantDetectedThisRun = false
+                                    store.updateAccount(account.id) {
+                                        it.copy(islandMerchantPending = false)
+                                    }
                                 }
                             },
                         )
-                        val transitionResult = engine.runAll(listOf(transition)).single()
-                        results += transitionResult
-                        if (!transitionResult.ok && nextAccount != null) {
-                            log("未能切换到下一账号，多号流程停止")
-                            stopAfterAccount = true
-                        }
-                    }
-                }
-
-                val failedResults = results.filterNot { it.ok }
-                completedAccounts++
-                if (failedResults.isNotEmpty()) allTasksSucceeded = false
-                if (failedResults.isNotEmpty()) {
-                    val accountIdentifier = errorAccountIdentifier(account)
-                    log("正在保存出错账号 $accountIdentifier 的运行日志")
-                    val report = taskErrorReports.save(
-                        accountIdentifier = accountIdentifier,
-                        failures = failedResults.map { result ->
-                            "${result.name}：${result.detail.ifBlank { "未提供失败原因" }}"
-                        },
-                        logs = completeRunLogsFrom(accountLogStart),
-                    )
-                    if (report != null) {
-                        queueReportAttachment(
-                            MahReportAttachment(
-                                kind = MahReportKind.TASK_ERROR,
-                                file = report,
-                                accountIdentifier = accountIdentifier,
-                            ),
-                        )
-                        log("错误报告已保存：${report.absolutePath}")
+                        if (index == 0 && !conf.options.login) {
+                            listOf(LoginTask(account, launchGame = false, verificationOnly = true,
+                                savedAccountPhones = savedAccountPhones)) + dailyTasks
+                        } else dailyTasks
                     } else {
-                        log("错误报告保存失败")
+                        listOf(LoginTask(account, savedAccountPhones = savedAccountPhones))
                     }
-                }
+                    val results = engine.runAll(tasks).toMutableList()
+                    var stopAfterAccount = false
 
-                summaries += "${account.label}: " + results.joinToString { r ->
-                    "${r.name}${if (r.ok) "✓" else "✗"}"
-                }
-                val barkConfig = store.config.first()
-                if (failedResults.isNotEmpty() && barkConfig.barkPushEnabled) {
-                    val accountName = account.label.takeIf { it.isNotBlank() && it != account.username }
-                        ?: "账号 ${index + 1}"
-                    val body = buildString {
-                        appendLine(accountName.take(80))
-                        results.forEach { result ->
-                            appendLine("${result.name}：${if (result.ok) "完成" else "失败"}")
-                            if (!result.ok) appendLine(result.detail.take(150))
+                    if (loginOnlyId == null) {
+                        val dailySucceeded = results.all { it.ok }
+                        if (!dailySucceeded) {
+                            log("账号 ${account.label} 有任务失败或结果不明，停止全部运行")
+                            stopAfterAccount = true
+                        } else {
+                            runJournal.record("daily_completed", accountId = account.id, outcome = "COMPLETED")
+                            val nextAccount = accounts.getOrNull(index + 1)
+                            val merchantNeedsRecord = !islandMerchantRecordedThisRun &&
+                                if (islandMerchantCheckedThisRun) {
+                                    islandMerchantDetectedThisRun
+                                } else {
+                                    account.islandMerchantPending
+                                }
+                            val accountNote = merchantRecordNote(account)
+                            if (merchantNeedsRecord) {
+                                merchantAccounts[account.id] = accountNote
+                                    ?: account.characterName.takeIf { it.isNotBlank() }
+                                    ?: "账号 ${index + 1}"
+                            }
+                            if (merchantNeedsRecord && accountNote != null) {
+                                val file = islandMerchantRecords.append(accountNote)
+                                if (file != null) {
+                                    islandMerchantRecordedThisRun = true
+                                    queueReportAttachment(
+                                        MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
+                                    )
+                                    log("老头账号备注已追加：$accountNote")
+                                    log("记录文件：${file.absolutePath}")
+                                    store.updateAccount(account.id) {
+                                        it.copy(islandMerchantPending = false)
+                                    }
+                                }
+                            }
+                            val captureCharacterName = merchantNeedsRecord &&
+                                !islandMerchantRecordedThisRun
+                            val transition = AccountTransitionTask(
+                                currentAccount = account,
+                                nextAccount = nextAccount,
+                                captureCharacterName = captureCharacterName,
+                                savedAccountPhones = savedAccountPhones,
+                                onCharacterName = { characterName ->
+                                    val shouldRecord = !islandMerchantRecordedThisRun &&
+                                        (islandMerchantDetectedThisRun || account.islandMerchantPending)
+                                    if (shouldRecord) {
+                                        val recordName = merchantRecordNote(account) ?: characterName
+                                        merchantAccounts[account.id] = recordName
+                                        val file = islandMerchantRecords.append(recordName)
+                                        if (file != null) {
+                                            islandMerchantRecordedThisRun = true
+                                            queueReportAttachment(
+                                                MahReportAttachment(MahReportKind.ISLAND_MERCHANT, file),
+                                            )
+                                            log("老头记录已追加：$recordName")
+                                            log("记录文件：${file.absolutePath}")
+                                        } else throw IOException("老头记录未写入，停止账号收尾")
+                                    }
+                                    store.updateAccount(account.id) {
+                                        it.copy(
+                                            characterName = characterName,
+                                            islandMerchantPending = !islandMerchantRecordedThisRun,
+                                        )
+                                    }
+                                },
+                            )
+                            // The transition owns A -> B. It must never recover with A's daily engine.
+                            val transitionResult = TaskEngine(ctx, expectedAccountId = account.id)
+                                .runAll(listOf(transition)).single()
+                            results += transitionResult
+                            if (!transitionResult.ok) {
+                                runJournal.record("account_stopped", accountId = account.id, outcome = transitionResult.outcome.name)
+                                log("账号收尾或切号未确认，多号流程停止，当前账号保留勾选")
+                                stopAfterAccount = true
+                            } else {
+                                runJournal.record("account_completed", accountId = account.id, outcome = "COMPLETED")
+                                store.updateAccount(account.id) { it.copy(enabled = false) }
+                                log("账号 ${account.label} 已完成日常和收尾，已自动取消勾选")
+                            }
                         }
-                    }.replace(account.password.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
-                        .replace(account.username.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
-                    val barkKey = BarkPushClient.normalizeDeviceKey(barkConfig.barkDeviceKey)
+                    }
+
+                    val failedResults = results.filterNot { it.ok }
+                    completedAccounts++
+                    if (failedResults.isNotEmpty()) allTasksSucceeded = false
+                    if (failedResults.isNotEmpty()) {
+                        val accountIdentifier = errorAccountIdentifier(account)
+                        log("正在保存出错账号 $accountIdentifier 的运行日志")
+                        val report = taskErrorReports.save(
+                            accountIdentifier = accountIdentifier,
+                            failures = failedResults.map { result ->
+                                "${result.name}：${result.detail.ifBlank { "未提供失败原因" }}"
+                            },
+                            logs = completeRunLogsFrom(accountLogStart),
+                        )
+                        if (report != null) {
+                            queueReportAttachment(
+                                MahReportAttachment(
+                                    kind = MahReportKind.TASK_ERROR,
+                                    file = report,
+                                    accountIdentifier = accountIdentifier,
+                                ),
+                            )
+                            log("错误报告已保存：${report.absolutePath}")
+                        } else {
+                            log("错误报告保存失败")
+                        }
+                    }
+
+                    summaries += "${account.label}: " + results.joinToString { r ->
+                        "${r.name}${when (r.outcome) {
+                            TaskOutcome.UNCERTAIN -> "（结果不明，已停止）"
+                            TaskOutcome.SKIPPED -> "（跳过）"
+                            else -> if (r.ok) "✓" else "✗"
+                        }}"
+                    }
+                    val barkConfig = store.config.first()
+                    if (failedResults.isNotEmpty() && barkConfig.barkPushEnabled) {
+                        val accountName = account.label.takeIf { it.isNotBlank() && it != account.username }
+                            ?: "账号 ${index + 1}"
+                        val body = buildString {
+                            appendLine(accountName.take(80))
+                            results.forEach { result ->
+                                appendLine("${result.name}：${if (result.ok) "完成" else "失败"}")
+                                if (!result.ok) appendLine(result.detail.take(150))
+                            }
+                        }.replace(account.password.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
+                            .replace(account.username.takeIf { it.isNotEmpty() } ?: "\u0000", "***")
+                        val barkKey = BarkPushClient.normalizeDeviceKey(barkConfig.barkDeviceKey)
+                        if (barkKey.isBlank()) {
+                            log("Bark 已开启但未填写推送地址，跳过推送")
+                        } else {
+                            try {
+                                BarkPushClient.send(
+                                    deviceKey = barkKey,
+                                    title = "MAH 单号任务失败",
+                                    body = body,
+                                )
+                                log("Bark 任务结果已推送")
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                log("Bark 推送失败，请检查网络和推送地址；任务结果已保留")
+                            }
+                        }
+                    }
+                    if (failedResults.isEmpty()) {
+                        _run.update { it.copy(logs = emptyList()) }
+                    }
+                    if (stopAfterAccount) break
+                }
+                val summaryLines = summaries.toMutableList()
+                val summary = summaryLines.joinToString("\n")
+                val endBarkConfig = store.config.first()
+                if (loginOnlyId == null && allTasksSucceeded && completedAccounts == accounts.size &&
+                    merchantAccounts.isNotEmpty() && endBarkConfig.barkPushEnabled
+                ) {
+                    var merchantBody = "本轮全部任务成功完成\n有人工岛老头的账号：\n" +
+                        merchantAccounts.values.distinct().joinToString("\n")
+                    for (account in accounts) {
+                        for (secret in listOf(account.username, account.password).filter { it.isNotEmpty() }) {
+                            merchantBody = merchantBody.replace(secret, "***")
+                        }
+                    }
+                    val barkKey = BarkPushClient.normalizeDeviceKey(endBarkConfig.barkDeviceKey)
                     if (barkKey.isBlank()) {
-                        log("Bark 已开启但未填写推送地址，跳过推送")
+                        log("Bark 已开启但未填写推送地址，跳过老头账号名单推送")
                     } else {
                         try {
-                            BarkPushClient.send(
-                                deviceKey = barkKey,
-                                title = "MAH 单号任务失败",
-                                body = body,
-                            )
-                            log("Bark 任务结果已推送")
+                            val parts = merchantBody.chunked(700)
+                            parts.forEachIndexed { index, body ->
+                                BarkPushClient.send(
+                                    deviceKey = barkKey,
+                                    title = "MAH 人工岛老头账号" + if (parts.size > 1) "（${index + 1}/${parts.size}）" else "",
+                                    body = body,
+                                )
+                            }
+                            log("全部任务成功，Bark 老头账号名单已推送")
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (_: Exception) {
-                            log("Bark 推送失败，请检查网络和推送地址；任务结果已保留")
+                            log("Bark 老头账号名单推送失败，账号记录已保留")
                         }
                     }
                 }
-                if (failedResults.isEmpty()) {
-                    _run.update { it.copy(logs = emptyList()) }
-                }
-                if (stopAfterAccount) break
-            }
-            val summaryLines = summaries.toMutableList()
-            if (mailNoRewardAccounts.isNotEmpty()) {
-                summaryLines += "邮件未见奖励弹窗，待核实账号：${mailNoRewardAccounts.joinToString("、")}"
-            }
-            val summary = summaryLines.joinToString("\n")
-            val endBarkConfig = store.config.first()
-            if (loginOnlyId == null && allTasksSucceeded && completedAccounts == accounts.size &&
-                merchantAccounts.isNotEmpty() && endBarkConfig.barkPushEnabled
-            ) {
-                var merchantBody = "本轮全部任务成功完成\n有人工岛老头的账号：\n" +
-                    merchantAccounts.values.distinct().joinToString("\n")
-                for (account in accounts) {
-                    for (secret in listOf(account.username, account.password).filter { it.isNotEmpty() }) {
-                        merchantBody = merchantBody.replace(secret, "***")
-                    }
-                }
-                val barkKey = BarkPushClient.normalizeDeviceKey(endBarkConfig.barkDeviceKey)
-                if (barkKey.isBlank()) {
-                    log("Bark 已开启但未填写推送地址，跳过老头账号名单推送")
-                } else {
+                if (reportAttachments.isNotEmpty()) {
                     try {
-                        val parts = merchantBody.chunked(700)
-                        parts.forEachIndexed { index, body ->
-                            BarkPushClient.send(
-                                deviceKey = barkKey,
-                                title = "MAH 人工岛老头账号" + if (parts.size > 1) "（${index + 1}/${parts.size}）" else "",
-                                body = body,
-                            )
-                        }
-                        log("全部任务成功，Bark 老头账号名单已推送")
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        log("Bark 老头账号名单推送失败，账号记录已保留")
+                        reportApi.send(
+                            MahRunReport(
+                                createdAt = System.currentTimeMillis(),
+                                attachments = reportAttachments.toList(),
+                            ),
+                        )
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        log("运行报告发送失败：${error.message ?: "未知错误"}")
                     }
                 }
+                log("全部结束")
+                runJournal.record("run_finished", outcome = if (allTasksSucceeded && completedAccounts == accounts.size) "COMPLETED" else "FAILED")
+                _run.update { it.copy(lastSummary = summary) }
+            } catch (cancelled: CancellationException) {
+                runCatching { journal?.record("run_stopped", outcome = "CANCELLED") }
+                log("已停止，本轮已确认步骤保存在进度记录中")
+                throw cancelled
+            } catch (error: Exception) {
+                val reason = journalRedact(error.message ?: "未知异常")
+                runCatching { journal?.record("run_failed", detail = reason, outcome = "FAILED") }
+                log("运行异常，已停止全部账号：$reason")
+                _run.update { it.copy(lastSummary = "运行异常，已停止全部账号：$reason") }
+            } finally {
+                runCatching { journal?.close() }.onFailure { log("关闭进度记录失败：${it.message ?: "未知异常"}") }
+                _run.update { it.copy(running = false, stopping = false) }
             }
-            if (reportAttachments.isNotEmpty()) {
-                try {
-                    reportApi.send(
-                        MahRunReport(
-                            createdAt = System.currentTimeMillis(),
-                            attachments = reportAttachments.toList(),
-                        ),
-                    )
-                } catch (error: Exception) {
-                    log("运行报告发送失败：${error.message ?: "未知错误"}")
-                }
-            }
-            log("全部结束")
-            _run.update { it.copy(running = false, lastSummary = summary) }
         }
         job = runJob
         runJob.invokeOnCompletion { cause ->
             if (cause != null) {
-                _run.update { it.copy(running = false) }
+                _run.update { it.copy(running = false, stopping = false) }
             }
         }
+        runJob.start()
     }
 
     fun stop() {
-        job?.cancel()
-        _run.update { it.copy(running = false) }
-        log("已停止")
+        val runningJob = job ?: return
+        if (runningJob.isCompleted || _run.value.stopping) return
+        _run.update { it.copy(running = true, stopping = true) }
+        log("正在停止，等待当前动作退出")
+        runningJob.cancel()
     }
 
     /** A user-entered note identifies the account; the auto-filled username does not. */

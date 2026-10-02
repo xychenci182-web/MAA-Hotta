@@ -89,3 +89,5 @@ Android Studio 左侧：`app` → `src` → `main` → `assets` → `templates`
 | mail_reward_popup.png | 邮件奖励弹层固定的“恭喜获得”标题 |
 | menu_settings_entry.png | 展开菜单中的“设置”按键 |
 | settings_user_center.png | 设置页顶部“用户中心”按键，同时验证已进入设置页 |
+
+`welfare_page_title.png`：福利页左上角“福利”标题，528 像素基准高度；保留白色字形和一像素轮廓。导航判定需同时确认标题与底栏/内容，浅色底栏不能单独判定为福利页。

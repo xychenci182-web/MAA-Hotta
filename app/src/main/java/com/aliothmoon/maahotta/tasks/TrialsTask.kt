@@ -44,7 +44,10 @@ class TrialsTask(private val type: TrialType) : GameTask {
 
         // Keep the normal order. Only transitions and confirmations are observed.
         val initial = TaskNavigationMachine.observe(ctx)
-        var resultReady = initial.state == com.aliothmoon.maahotta.vision.PageState.TRIALS_RESULT
+        if (initial.state == com.aliothmoon.maahotta.vision.PageState.TRIALS_RESULT) {
+            return stopAfterBattle(ctx, "发现遗留作战奖励，本轮尚未提交代理战斗，不能确认其类型及归属")
+        }
+        var resultReady = false
         var proxyReady = initial.state == com.aliothmoon.maahotta.vision.PageState.TRIALS_PROXY
         if (!resultReady && !proxyReady) {
             if (waitForLogo(ctx, logo, 700) == null) {
@@ -83,9 +86,11 @@ class TrialsTask(private val type: TrialType) : GameTask {
             val target = waitForProxy(ctx, proxy, 2_000)
                 ?: return stopAfterBattle(ctx, "代理战斗按钮未确认")
             ctx.log("已确认代理战斗，执行一次并等待作战结果")
+            ctx.markActionSubmitted("$id:proxy_battle")
             ctx.device.tap(target.point.x, target.point.y)
             resultReady = waitForSuccess(ctx, result, 30_000) != null
             if (!resultReady) return stopAfterBattle(ctx, "代理战斗后未确认作战成功，不重复执行")
+            ctx.confirmActionResult()
         }
         for (attempt in 1..3) {
             if (waitForSuccess(ctx, result, 700) == null) {
@@ -101,12 +106,12 @@ class TrialsTask(private val type: TrialType) : GameTask {
         return stopAfterBattle(ctx, "作战成功奖励未能关闭")
     }
 
-    private fun noVitality(): TaskResult = TaskResult(title, true, "当前活力不足，已结束历练；保留窗口")
+    private fun noVitality(): TaskResult = TaskResult.skipped(title, "当前活力不足，已结束历练；保留窗口")
 
     private suspend fun stopAfterBattle(ctx: BotContext, detail: String): TaskResult {
-        ctx.log("$detail，代理战斗已经点击，停止重试并保存当前画面")
+        ctx.log("$detail，状态无法确认，停止重试并保存当前画面")
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 
     private suspend fun enterRequiredHub(

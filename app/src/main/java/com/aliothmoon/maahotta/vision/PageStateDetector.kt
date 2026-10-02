@@ -18,6 +18,23 @@ object PageStateDetector {
             return if (selected != null && claim != null) observed(PageState.MAIL, "claim" to claim)
             else observed(PageState.UNKNOWN)
         }
+        // A pale bottom strip is a candidate only. Confirm content/title and distinguish the hub.
+        if (!CheckInScreenDetector.isRewardPopup(screen) &&
+            !GameScreenDetector.hasConfirmationPanel(screen) &&
+            WelfareNavigationDetector.hasBottomNavigation(screen)) {
+            if (WelfareNavigationDetector.hasPageTitle(screen, template("welfare_page_title"))) {
+                return observed(when {
+                    SupplyScreenDetector.isSupplyPage(screen) -> PageState.SUPPLY
+                    CheckInScreenDetector.isSignInPage(screen) -> PageState.SIGN_IN
+                    else -> PageState.WELFARE
+                })
+            }
+            if (RequiredHubScreenDetector.hasMultipleTabs(screen, template)) return observed(PageState.HUB)
+        }
+        // inspectHud already excludes instance timers, warp, exit modals and login panels.
+        // Avoid scanning unrelated trial/mail templates before each of the three HUD frames.
+        val detection = GameScreenDetector.inspectHud(screen, hud)
+        if (detection.accepted) return observed(PageState.HUD, "menu" to detection.menu)
         // Modal content precedes the scene that can remain visible behind it.
         val confirm = BygoneScreenDetector.findExitConfirm(screen, template("bygone_exit_confirm"))
         if (confirm != null && BygoneScreenDetector.findExitDialog(screen, template("bygone_exit_dialog")) != null)
@@ -32,9 +49,6 @@ object PageStateDetector {
         val popup = MailScreenDetector.findRewardPopup(screen, template("mail_reward_popup"))
         if (popup != null && CheckInScreenDetector.isRewardPopup(screen))
             return observed(PageState.REWARD)
-        // The dungeon exclusions above always take precedence, including with a strong menu hit.
-        val detection = GameScreenDetector.inspectHud(screen, hud)
-        if (detection.accepted) return observed(PageState.HUD, "menu" to detection.menu)
         val trial = TrialsScreenDetector.findDialogLogo(screen, template("trials_dialog_logo"))
         if (trial != null) {
             val trialControls = arrayOf(
@@ -54,9 +68,6 @@ object PageStateDetector {
         if (selected != null && claim != null) return observed(PageState.MAIL, "claim" to claim)
         val mail = MailScreenDetector.findMailTab(screen, template("social_mail_tab"))
         if (mail != null) return observed(PageState.SOCIAL, "mail" to mail)
-        if (SupplyScreenDetector.isSupplyPage(screen)) return observed(PageState.SUPPLY)
-        if (CheckInScreenDetector.isSignInPage(screen)) return observed(PageState.SIGN_IN)
-        if (WelfareNavigationDetector.hasBottomNavigation(screen)) return observed(PageState.WELFARE)
         val taste = KitchenScreenDetector.findTaste(screen, template("btn_eat"))?.takeIf { it.score >= 0.70f }
         if (taste != null) return observed(PageState.KITCHEN, "taste" to taste)
         if (IslandMerchantScreenDetector.findIslandPage(screen, template("island_page_title")) != null)
@@ -69,13 +80,7 @@ object PageStateDetector {
         val row = GuildScreenDetector.findRewardsRow(screen, template("guild_rewards_row"))
         if (info != null && row != null) return observed(PageState.GUILD_INFO, "daily" to daily)
         if (daily != null && info != null) return observed(PageState.GUILD, "daily" to daily)
-        val tabs = listOf(
-            RequiredHubScreenDetector.findWeeklyTab(screen, template("hub_weekly_tab")),
-            RequiredHubScreenDetector.findRecommendTab(screen, template("hub_recommend_tab")),
-            RequiredHubScreenDetector.findLeisureTab(screen, template("hub_leisure_tab")),
-            RequiredHubScreenDetector.findChallengeTab(screen, template("hub_challenge_tab")),
-        )
-        if (tabs.count { it != null } >= 2) return observed(PageState.HUB)
+        if (RequiredHubScreenDetector.hasMultipleTabs(screen, template)) return observed(PageState.HUB)
         val dive = BygoneScreenDetector.findDiveNext(screen, template("bygone_dive_next"))?.takeIf { it.score >= 0.70f }
         if (dive != null) return observed(PageState.BYGONE_FLOOR, "dive" to dive)
         val social = MailScreenDetector.findSocialMenu(screen, template("menu_social_entry"))

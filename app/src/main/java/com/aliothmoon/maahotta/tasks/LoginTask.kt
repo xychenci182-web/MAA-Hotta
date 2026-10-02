@@ -4,6 +4,7 @@ import android.graphics.Point
 import com.aliothmoon.maahotta.constant.Packages
 import com.aliothmoon.maahotta.data.GameAccount
 import com.aliothmoon.maahotta.engine.BotContext
+import com.aliothmoon.maahotta.engine.AccountIdentity
 import com.aliothmoon.maahotta.engine.GameTask
 import com.aliothmoon.maahotta.engine.TaskResult
 import com.aliothmoon.maahotta.vision.TemplateMatcher
@@ -21,9 +22,13 @@ class LoginTask(
     private val account: GameAccount,
     private val launchGame: Boolean = true,
     private val forceSwitchWithoutVerification: Boolean = false,
+    private val verificationOnly: Boolean = false,
+    private val savedAccountPhones: List<String> = listOf(account.username),
 ) : GameTask {
     override val id = "login"
-    override val title = "登录账号"
+    override val title = if (verificationOnly) "核验当前账号" else "登录账号"
+    override fun allowEngineRetry(): Boolean = false
+    override fun allowEngineRelogin(): Boolean = false
     private var finalHudConfirmationAllowed = false
 
     private data class PhonePage(val nextPoint: Point?)
@@ -36,6 +41,60 @@ class LoginTask(
     }
 
     override suspend fun run(ctx: BotContext): TaskResult {
+        ctx.invalidateAccountIdentity()
+        val login = if (verificationOnly) verifyExistingAccount(ctx) else runLogin(ctx)
+        // A HUD proves that a login finished; audit the current account before allowing daily actions.
+        val result = if (!verificationOnly && login.ok) verifyExistingAccount(ctx) else login
+        if (result.ok) ctx.confirmAccountIdentity(account.id)
+        return result
+    }
+
+    /** Disabling automatic login still requires identity proof, but never switches or enters credentials. */
+    private suspend fun verifyExistingAccount(ctx: BotContext): TaskResult {
+        ctx.resetHudDetection()
+        return withTimeoutOrNull(120_000L) {
+            awaitGameCapture(ctx)
+            val userCenterVisible = ctx.device.viewInfo("lib_change_account") != null ||
+                accountOverlay(ctx, AccountScreenDetector::isUserCenter)
+            if (!userCenterVisible && !openUserCenterFromGame(ctx)) {
+                return@withTimeoutOrNull TaskResult.uncertain(title, "未能进入用户中心核验账号")
+            }
+            val deadline = ctx.elapsedRealtime() + 8_000L
+            var matched = false
+            while (ctx.elapsedRealtime() < deadline) {
+                val center = ctx.device.viewInfo("lib_change_account") != null ||
+                    accountOverlay(ctx, AccountScreenDetector::isUserCenter)
+                if (center) {
+                    val shown = ctx.device.viewInfo("lib_account")?.text ?: ctx.device.maskedAccountPhone()
+                    if (sameSavedPhone(shown)) { matched = true; break }
+                }
+                delay(400)
+            }
+            if (!matched) return@withTimeoutOrNull TaskResult.uncertain(title, "当前账号与所选账号不一致、掩码存在冲突或无法核对，停止日常")
+            if (!ctx.device.clickView("lib_close") && !ctx.device.clickView("lib_goback")) {
+                tapAccountAnchor(ctx, 211f, 28f)
+            }
+            val closeDeadline = ctx.elapsedRealtime() + 5_000L
+            var centerGone = false
+            while (ctx.elapsedRealtime() < closeDeadline) {
+                delay(400)
+                val screen = ctx.device.screenshot() ?: continue
+                val stillVisible = try {
+                    AccountScreenDetector.isUserCenter(screen) || ctx.device.viewInfo("lib_change_account") != null
+                } finally { screen.recycle() }
+                if (!stillVisible) { centerGone = true; break }
+            }
+            if (!centerGone) return@withTimeoutOrNull TaskResult.uncertain(title, "账号已核对，但未确认用户中心关闭")
+            when (ctx.gameScreen()) {
+                GameScreen.SETTINGS -> leaveSettingsAndEnter(ctx)
+                GameScreen.HUD -> Unit
+                else -> return@withTimeoutOrNull TaskResult.uncertain(title, "账号中心关闭后的页面无法确认")
+            }
+            waitEntered(ctx)
+        } ?: TaskResult.uncertain(title, "账号核验超时，停止日常")
+    }
+
+    private suspend fun runLogin(ctx: BotContext): TaskResult {
         ctx.resetHudDetection()
         finalHudConfirmationAllowed = false
         ctx.log(
@@ -566,10 +625,7 @@ class LoginTask(
     }
 
     private fun sameSavedPhone(shown: String?): Boolean {
-        val phone = account.username.trim().removePrefix("+86")
-        if (phone.length != 11 || !phone.all(Char::isDigit)) return false
-        val mask = Regex("(\\d{3})\\*+(\\d{4})").find(shown.orEmpty()) ?: return false
-        return mask.groupValues[1] == phone.take(3) && mask.groupValues[2] == phone.takeLast(4)
+        return AccountIdentity.matches(shown, account.username, savedAccountPhones)
     }
 
     private suspend fun accountOverlay(ctx: BotContext, detector: (android.graphics.Bitmap) -> Boolean): Boolean {

@@ -11,11 +11,11 @@ fun buildDailyTasks(
     account: GameAccount,
     options: TaskOptions,
     includeLogin: Boolean = true,
+    savedAccountPhones: List<String> = listOf(account.username),
     onIslandMerchantDetected: suspend (Boolean) -> Unit = {},
-    onMailNoRewardPopup: suspend () -> Unit = {},
 ): List<GameTask> {
     val tasks = mutableListOf<GameTask>()
-    if (options.login && includeLogin) tasks += LoginTask(account)
+    if (options.login && includeLogin) tasks += LoginTask(account, savedAccountPhones = savedAccountPhones)
     val ordered = options.orderedDailyTasks().filter(options::isEnabled)
     ordered.forEachIndexed { index, task ->
         when (task) {
@@ -24,7 +24,7 @@ fun buildDailyTasks(
             )
             DailyTask.SUPPLY -> tasks += SupplyTask()
             DailyTask.MAIL -> tasks += WeekdayTask(
-                MailTask(onNoRewardPopup = onMailNoRewardPopup),
+                MailTask(),
                 options.mailWeekdays,
             )
             DailyTask.KITCHEN -> tasks += WeekdayTask(

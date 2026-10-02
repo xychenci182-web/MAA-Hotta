@@ -19,8 +19,11 @@ class AccountTransitionTask(
     private val nextAccount: GameAccount?,
     private val captureCharacterName: Boolean,
     private val onCharacterName: suspend (String) -> Unit,
+    private val savedAccountPhones: List<String> = listOfNotNull(currentAccount.username, nextAccount?.username),
 ) : GameTask {
     override val id = "account_transition"
+    override fun allowEngineRetry(): Boolean = false
+    override fun allowEngineRelogin(): Boolean = false
     override val title = when {
         nextAccount != null -> "切换到下一账号"
         captureCharacterName -> "记录角色名称"
@@ -91,10 +94,12 @@ class AccountTransitionTask(
             return TaskResult(title, false, "点击用户中心后未识别到账号中心窗口")
         }
 
+        ctx.invalidateAccountIdentity()
         val login = LoginTask(
             account = next,
             launchGame = false,
             forceSwitchWithoutVerification = true,
+            savedAccountPhones = savedAccountPhones,
         ).run(ctx)
         return TaskResult(
             title,
@@ -106,6 +111,8 @@ class AccountTransitionTask(
                 characterName?.let { "已记录 $it，但切换 ${next.label} 失败：${login.detail}" }
                     ?: "切换 ${next.label} 失败：${login.detail}"
             },
+            retryable = login.retryable,
+            outcome = login.outcome,
         )
     }
 

@@ -9,6 +9,9 @@ fun main() {
  fun load(p:String)=Bitmap(ImageIO.read(File(p)))
  val template=HudTemplates(load("app/src/main/assets/templates/hud_menu_body.png"),load("app/src/main/assets/templates/hud_minimap_controls.png"),load("app/src/main/assets/templates/bygone_exit_dialog.png"),load("app/src/main/assets/templates/bygone_exit_confirm.png"),load("app/src/main/assets/templates/hud_dodge.png"),load("app/src/main/assets/templates/bygone_exit_icon.png"),load("app/src/main/assets/templates/bygone_scene_timer.png"),load("app/src/main/assets/templates/bygone_warp_start.png"))
  val password = load("tests/hud/fixtures/password-submit.png")
+ val currentMenu = GameScreenDetector.inspectHud(load("tests/hud/fixtures/main-menu-current.png"), template)
+ println("Current menu screenshot: ${currentMenu.summary()} point=${currentMenu.menu?.point}")
+ check(currentMenu.accepted) { currentMenu.summary() }
  for (height in listOf(360, 720, 1080)) {
  val frame = Bitmap.createScaledBitmap(password, password.width * height / password.height, height, true)
  val hit = checkNotNull(com.aliothmoon.maahotta.vision.AccountScreenDetector.findPasswordSubmit(frame))

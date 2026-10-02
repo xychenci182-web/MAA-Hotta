@@ -29,13 +29,14 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
 
         var alreadyDonated = false
         val initialState = ctx.waitUntil(3_000, 350) { screen ->
-            GuildScreenDetector.findDonateZero(screen, donateZero, donateOne)?.also {
+            GuildScreenDetector.findDonateZero(screen, donateZero, donateOne)?.copy(requiresStableFrames = true)?.also {
                 alreadyDonated = true
-            } ?: GuildScreenDetector.findDonateNow(screen, donateNow)
+            } ?: GuildScreenDetector.findDonateNow(screen, donateNow)?.also { alreadyDonated = false }
         } ?: return failAndExit(ctx, "公会日常页未识别到捐献状态")
         if (alreadyDonated) {
             ctx.log("可捐献次数已经是0/1，今日捐赠已完成")
             return finish(ctx, "可捐献次数已是0/1")
+                .let { if (it.ok) it.copy(outcome = com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED) else it }
         }
 
         var donateButton = initialState
@@ -58,28 +59,17 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
         if (confirmation == null) {
             return failAndExit(ctx, "未同时识别到确认捐献文字和确定按钮")
         }
-        var confirmButtonMatch = requireNotNull(confirmation)
-        var donated = false
-        for (attempt in 1..3) {
-            ctx.log(if (attempt == 1) "已确认捐献弹窗内容，点击确定" else "捐献结果未出现，重新识别后再次点击确定")
-            ctx.device.tap(confirmButtonMatch.point.x, confirmButtonMatch.point.y)
-            donated = waitForDonateZero(ctx, donateZero, donateOne, 4_000) != null
-            if (donated) break
-
-            val refreshed = waitForConfirmation(ctx, confirmText, confirmButton, 1_500)
-            if (refreshed != null) {
-                confirmButtonMatch = refreshed
-            } else {
-                ctx.log("确定按钮已消失，捐献结果可能仍在加载，继续等待")
-                donated = waitForDonateZero(ctx, donateZero, donateOne, 5_000) != null
-                break
-            }
-        }
+        val confirmButtonMatch = requireNotNull(confirmation)
+        ctx.log("已确认捐献弹窗内容，提交一次并等待次数变为0/1")
+        ctx.markActionSubmitted("$id:confirm_donation")
+        ctx.device.tap(confirmButtonMatch.point.x, confirmButtonMatch.point.y)
+        val donated = waitForDonateZero(ctx, donateZero, donateOne, 9_000) != null
         if (!donated) {
             ctx.log("已点击捐献确定，但未确认次数变为0/1，停止后续任务并保存当前画面")
             ctx.saveTaskDiagnostic(id)
-            return TaskResult(title, false, "捐献结果无法确认", retryable = false)
+            return TaskResult.uncertain(title, "捐献结果无法确认，不重复提交确定")
         }
+        ctx.confirmActionResult()
         ctx.log("可捐献次数已从1/1变为0/1")
         return finish(ctx, "捐献成功，可捐献次数0/1")
     }
@@ -121,7 +111,9 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
         zeroTemplate: Bitmap,
         oneTemplate: Bitmap,
         timeoutMs: Long,
-    ): MatchResult? = ctx.waitUntil(timeoutMs, 350) { screen ->
-        GuildScreenDetector.findDonateZero(screen, zeroTemplate, oneTemplate)
+    ): MatchResult? {
+        return ctx.waitUntil(timeoutMs, 350) { screen ->
+            GuildScreenDetector.findDonateZero(screen, zeroTemplate, oneTemplate)?.copy(requiresStableFrames = true)
+        }
     }
 }

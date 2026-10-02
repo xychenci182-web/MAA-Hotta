@@ -33,11 +33,13 @@ class BygonePhantasmTask : GameTask {
         // Resume from the actual dungeon state, never open the Must-do hub over it.
         val current = TaskNavigationMachine.observe(ctx)
         if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_CONFIRM) {
+            ctx.markActionSubmitted("$id:resume_dungeon")
             return exitScene(ctx, null, exitDialogTemplate, confirmTemplate,
                 sceneTimerTemplate, diveNextTemplate, skipTemplate)
         }
         if (current.state in setOf(com.aliothmoon.maahotta.vision.PageState.BYGONE_SCENE,
                 com.aliothmoon.maahotta.vision.PageState.BYGONE_WARP)) {
+            ctx.markActionSubmitted("$id:resume_dungeon")
             val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
                 warpStartTemplate, sceneTimerTemplate, 45_000)
                 ?: return stopAfterDive(ctx, "未能确认旧日副本场景")
@@ -47,6 +49,7 @@ class BygonePhantasmTask : GameTask {
         if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_FLOOR) {
             val dive = waitForDiveNext(ctx, diveNextTemplate, 2_000)
                 ?: return stopAfterDive(ctx, "旧日潜入页未确认潜入按钮")
+            ctx.markActionSubmitted("$id:dive")
             ctx.device.tap(dive.point.x, dive.point.y)
             val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
                 warpStartTemplate, sceneTimerTemplate, 45_000)
@@ -94,6 +97,7 @@ class BygonePhantasmTask : GameTask {
                 continue
             }
             ctx.log("识别到潜入按钮，点击进入副本")
+            ctx.markActionSubmitted("$id:dive")
             ctx.device.tap(diveNext.point.x, diveNext.point.y)
 
             val firstExit = waitThroughEntryAnimation(
@@ -164,13 +168,14 @@ class BygonePhantasmTask : GameTask {
         if (!returnedToGame) {
             return stopAfterDive(ctx, "点击确定后未识别到主界面菜单")
         }
+        ctx.confirmActionResult()
         return TaskResult(title, true, "已潜入并退出到游戏主界面")
     }
 
     private suspend fun stopAfterDive(ctx: BotContext, detail: String): TaskResult {
-        ctx.log("$detail，潜入已经点击，停止重试并保存当前画面")
+        ctx.log("$detail，旧日状态无法确认，停止重试并保存当前画面")
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 
     private suspend fun waitForEntry(ctx: BotContext, template: Bitmap, timeoutMs: Long): MatchResult? =
@@ -226,8 +231,7 @@ class BygonePhantasmTask : GameTask {
         timeoutMs: Long,
     ): MatchResult? {
         val deadline = ctx.deadlineAfter(timeoutMs)
-        var lastDiveTapAt = ctx.elapsedRealtime()
-        var diveTapCount = 1
+        var loggedPendingDive = false
         var lastSkipTapAt = 0L
         var skipClickCount = 0
         var absenceStartedAt: Long? = null
@@ -240,15 +244,9 @@ class BygonePhantasmTask : GameTask {
             if (frame?.dive != null) {
                 absenceStartedAt = null
                 readyForActions = false
-                if (now - lastDiveTapAt >= 1_800) {
-                    if (diveTapCount >= 3) {
-                        ctx.log("多次点击潜入按钮后仍停留在原页面")
-                        return null
-                    }
-                    diveTapCount++
-                    ctx.log("潜入按钮仍在，重新识别并点击")
-                    ctx.device.tap(frame.dive.point.x, frame.dive.point.y)
-                    lastDiveTapAt = ctx.elapsedRealtime()
+                if (!loggedPendingDive) {
+                    ctx.log("潜入已经提交，按钮仍在，继续观察且不重复潜入")
+                    loggedPendingDive = true
                 }
             } else if (frame != null) {
                 if (!readyForActions) {

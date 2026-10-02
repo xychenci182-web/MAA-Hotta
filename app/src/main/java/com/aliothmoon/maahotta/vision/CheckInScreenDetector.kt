@@ -162,4 +162,9 @@ object CheckInScreenDetector {
         signInCenters(screen)?.any { center ->
             hasClaimCheck(screen, center.toFloat() / screen.width)
         } == true
+
+    fun hasAllClaimChecks(screen: Bitmap): Boolean =
+        signInCenters(screen)?.all { center ->
+            hasClaimCheck(screen, center.toFloat() / screen.width)
+        } == true
 }

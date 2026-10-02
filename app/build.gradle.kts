@@ -13,8 +13,8 @@ android {
         applicationId = "com.aliothmoon.maahotta"
         minSdk = 28
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.2.5"
+        versionCode = 8
+        versionName = "0.2.6"
     }
 
     buildTypes {
@@ -40,6 +40,11 @@ android {
         compose = true
         buildConfig = true
         aidl = true
+    }
+
+    androidResources {
+        // Local bootstrap credentials are never included in distributable APKs.
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:default_accounts.txt"
     }
 }
 

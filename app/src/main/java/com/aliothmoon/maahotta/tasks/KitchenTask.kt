@@ -8,6 +8,8 @@ import com.aliothmoon.maahotta.engine.RelPoint
 import com.aliothmoon.maahotta.engine.TaskResult
 import com.aliothmoon.maahotta.vision.KitchenScreenDetector
 import com.aliothmoon.maahotta.vision.MatchResult
+import com.aliothmoon.maahotta.vision.PageState
+import com.aliothmoon.maahotta.vision.PageStateDetector
 import com.aliothmoon.maahotta.vision.ScreenTextFinder
 import com.aliothmoon.maahotta.vision.ScreenTextMatch
 import com.aliothmoon.maahotta.vision.SearchRegion
@@ -21,9 +23,9 @@ class KitchenTask : GameTask {
 
     private val rewardPopupOutside = RelPoint(0.50f, 0.10f)
 
-    // Three daily meals are expected; the extra two taps allow for missed input.
+    // Each meal is a separate submission. An unconfirmed meal is never repeated.
     // Completion is determined only by the mark on the Must-do card.
-    private val maxTasteTaps = 5
+    private val maxTasteTaps = 3
     private val maxNavigationFailures = 3
 
     override suspend fun run(ctx: BotContext): TaskResult {
@@ -41,9 +43,13 @@ class KitchenTask : GameTask {
             val taste = waitForTaste(ctx, tasteTemplate, 2_000)
                 ?: return stopWithScreenshot(ctx, "私厨页未确认品尝按钮")
             ctx.log("状态：私厨页，直接继续品尝")
+            ctx.markActionSubmitted("$id:taste_1")
             ctx.device.tap(taste.x, taste.y)
             taps++
-            waitForTasteToDisappear(ctx, tasteTemplate, 3_000)
+            if (!waitForTasteResult(ctx, tasteTemplate, rewardPopupTemplate, completedTemplate, 12_000)) {
+                return stopWithScreenshot(ctx, "品尝后未确认奖励或私厨完成标记，不重复品尝")
+            }
+            ctx.confirmActionResult()
             if (!dismissRewardPopup(ctx, rewardPopupTemplate, 1_500) || !RequiredHubNavigator.returnToHub(ctx)) {
                 return stopWithScreenshot(ctx, "品尝后未能确认返回必做页")
             }
@@ -100,10 +106,12 @@ class KitchenTask : GameTask {
             navigationFailures = 0
             taps++
             ctx.log("右下角已识别品尝，点击识别位置（第 $taps 次点击）")
+            ctx.markActionSubmitted("$id:taste_$taps")
             ctx.device.tap(taste.x, taste.y)
-            if (!waitForTasteToDisappear(ctx, tasteTemplate, 3_000)) {
-                ctx.log("点击后未确认品尝按钮消失，返回必做页复查完成状态")
+            if (!waitForTasteResult(ctx, tasteTemplate, rewardPopupTemplate, completedTemplate, 12_000)) {
+                return stopWithScreenshot(ctx, "第 $taps 次品尝结果无法确认，不返回重放品尝")
             }
+            ctx.confirmActionResult()
             if (!dismissRewardPopup(ctx, rewardPopupTemplate, 700)) {
                 return stopWithScreenshot(ctx, "品尝后奖励弹窗无法关闭")
             }
@@ -118,7 +126,7 @@ class KitchenTask : GameTask {
             }
             ctx.log("MIA 私厨尚未打勾，继续进入私厨品尝")
         }
-        return stopWithScreenshot(ctx, "点击品尝 $taps 次后必做页仍未打勾，已停止以防卡死")
+        return stopWithScreenshot(ctx, "已确认 $taps 次品尝后必做页仍未打勾，不追加品尝")
     }
 
     private suspend fun openKitchen(
@@ -192,18 +200,31 @@ class KitchenTask : GameTask {
         return null
     }
 
-    private suspend fun waitForTasteToDisappear(ctx: BotContext, template: Bitmap, timeoutMs: Long): Boolean {
+    private suspend fun waitForTasteResult(
+        ctx: BotContext,
+        tasteTemplate: Bitmap,
+        rewardTemplate: Bitmap,
+        completedTemplate: Bitmap,
+        timeoutMs: Long,
+    ): Boolean {
         val deadline = ctx.deadlineAfter(timeoutMs)
-        var absentFrames = 0
+        var confirmedFrames = 0
         while (ctx.elapsedRealtime() < deadline) {
             val screen = ctx.device.screenshot()
             if (screen == null) {
+                confirmedFrames = 0
                 delay(100)
                 continue
             }
-            val visible = try {
+            val confirmed = try {
                 withTimeoutOrNull(minOf(8_000L, deadline - ctx.elapsedRealtime()).coerceAtLeast(1L)) {
-                    findTasteOnScreen(screen, template) != null
+                    val tasteAbsent = findTasteOnScreen(screen, tasteTemplate) == null
+                    val rewardVisible = KitchenScreenDetector.findRewardPopup(screen, rewardTemplate) != null
+                    val hubCompleted = !rewardVisible && PageStateDetector.inspect(
+                        screen, ctx.templates::get, ctx.hudTemplates(),
+                    ).state == PageState.HUB &&
+                        KitchenScreenDetector.findCompleted(screen, completedTemplate) != null
+                    tasteAbsent && (rewardVisible || hubCompleted)
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -211,12 +232,13 @@ class KitchenTask : GameTask {
             } finally {
                 screen.recycle()
             }
-            if (visible == false) {
-                absentFrames++
-                if (absentFrames >= 2) return true
+            if (confirmed == true) {
+                confirmedFrames++
+                if (confirmedFrames >= 2) return true
             } else {
-                absentFrames = 0
+                confirmedFrames = 0
             }
+            delay(350)
         }
         return false
     }
@@ -250,11 +272,13 @@ class KitchenTask : GameTask {
         title,
         true,
         if (taps == 0) "必做页已打勾，MIA 私厨已完成" else "点击品尝 $taps 次后必做页已打勾",
+        outcome = if (taps == 0) com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED
+            else com.aliothmoon.maahotta.engine.TaskOutcome.COMPLETED,
     )
 
     private suspend fun stopWithScreenshot(ctx: BotContext, detail: String): TaskResult {
         ctx.log(detail)
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, detail, retryable = false)
+        return TaskResult.uncertain(title, detail)
     }
 }

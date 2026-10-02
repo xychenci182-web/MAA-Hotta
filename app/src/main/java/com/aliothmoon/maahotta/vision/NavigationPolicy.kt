@@ -18,6 +18,13 @@ enum class NavigationAction {
 
 /** Pure transition policy: no actions on an unknown page, and no HUD shortcut from a dungeon. */
 object NavigationPolicy {
+    /** Destination pages have their own task-level content checks. Do not spend a second full scan on them. */
+    fun requiredFrames(state: PageState, action: NavigationAction): Int = when {
+        state in setOf(PageState.HUD, PageState.MENU, PageState.BYGONE_SCENE) -> 3
+        action == NavigationAction.READY -> 1
+        else -> 2
+    }
+
     fun next(state: PageState, goal: NavigationGoal): NavigationAction {
         if (state == PageState.UNKNOWN) return NavigationAction.WAIT
         if (goal == NavigationGoal.BYGONE && state in setOf(PageState.BYGONE_FLOOR,
