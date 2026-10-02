@@ -81,46 +81,60 @@ class BotContext(
     /** Set by the engine: successful tasks leave their verified page for the next state transition. */
     var preserveTaskPage: Boolean = false
     private val rawDevice = device
+    private val captureReadiness = CaptureReadiness(::elapsedRealtime, onWaiting = { remaining ->
+        log("登录加载中，截图暂未就绪，继续等待（剩余 ${remaining / 1_000} 秒）")
+    })
+
+    suspend fun <T> withLoginCaptureDeadline(deadline: Long, action: suspend () -> T): T =
+        captureReadiness.within(deadline, action)
     // All task screenshots pass through the highest-priority popup handler.
     val device: DeviceController = object : DeviceController by rawDevice {
         // Synchronous backends may not suspend before sending an input; reject cancelled runs here.
         override suspend fun tap(x: Int, y: Int, holdMs: Long) {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             rawDevice.tap(x, y, holdMs)
         }
 
         override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             rawDevice.swipe(x1, y1, x2, y2, durationMs)
         }
 
         override suspend fun inputText(text: String): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.inputText(text)
         }
 
         override suspend fun clickView(viewIdSuffix: String): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.clickView(viewIdSuffix)
         }
 
         override suspend fun clickText(text: String): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.clickText(text)
         }
 
         override suspend fun setViewText(viewIdSuffix: String, text: String): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.setViewText(viewIdSuffix, text)
         }
 
         override suspend fun launchApp(packageName: String, forceStop: Boolean): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.launchApp(packageName, forceStop)
         }
 
         override suspend fun forceStop(packageName: String): Boolean {
             currentCoroutineContext().ensureActive()
+            clearHudConfirmation()
             return rawDevice.forceStop(packageName)
         }
 
@@ -129,7 +143,7 @@ class BotContext(
             var handled = false
             repeat(10) {
                 currentCoroutineContext().ensureActive()
-                val shot = rawDevice.screenshot() ?: return null
+                val shot = captureReadiness.read { rawDevice.screenshot() } ?: return null
                 val visible = try {
                     dismissLineSwitch(shot)
                 } catch (error: Throwable) {
@@ -371,34 +385,6 @@ class BotContext(
         return detected
     }
 
-    /**
-     * Handles the fixed-position server disconnect dialog. The dialog can
-     * reappear several times while the client returns to its login screen.
-     */
-    suspend fun dismissDisconnectDialog(): Boolean {
-        var handled = false
-        repeat(8) { attempt ->
-            val shot = device.screenshot() ?: throw ScreenshotUnavailableException()
-            val visible = try {
-                withTimeoutOrNull(6_000) {
-                    ScreenTextFinder.find(shot, listOf("无法连接服务器")) != null
-                } ?: throw IllegalStateException("连接状态识别超时，停止运行")
-            } finally {
-                shot.recycle()
-            }
-            if (!visible) return handled
-
-            handled = true
-            log(
-                if (attempt == 0) "识别到无法连接服务器，点击确定返回登录界面"
-                else "掉线提示再次出现，继续点击确定",
-            )
-            val size = device.screenSize()
-            device.tap((size.x * 0.66f).toInt(), (size.y * 0.54f).toInt())
-        }
-        return handled
-    }
-
     /** OCRs the cropped heading, then locates the X in the same full screenshot. */
     suspend fun dismissAnnouncement(): Boolean {
         val screen = device.screenshot() ?: return false
@@ -595,23 +581,45 @@ class BotContext(
         )
     }
 
-    /** Require three fresh matching frames; never retain a hit across actions. */
+    /** Require matching frames; never retain a hit across explicit resets or failed frames. */
     private var pendingHudFrame: com.aliothmoon.maahotta.vision.HudDetection? = null
     private var pendingHudCount = 0
     private var pendingHudAt = 0L
     private var pendingHudWidth = 0
     private var pendingHudHeight = 0
+    private val hudConfirmTtlMs = 2_500L
 
-    /** Only finishes a pair already started before the login deadline. */
-    suspend fun finishPendingHudConfirmation(deadline: Long): Boolean {
+    private fun clearHudConfirmation() {
+        pendingHudFrame = null
+        pendingHudCount = 0
+        pendingHudAt = 0L
+        pendingHudWidth = 0
+        pendingHudHeight = 0
+    }
+
+    private fun hasFreshHudConfirmation(requiredFrames: Int): Boolean =
+        pendingHudCount >= requiredFrames &&
+            pendingHudFrame?.accepted == true &&
+            elapsedRealtime() - pendingHudAt <= hudConfirmTtlMs
+
+    /** Consume completed evidence or finish only the frames missing before the login deadline. */
+    suspend fun finishPendingHudConfirmation(deadline: Long, allowAdditionalFrames: Boolean = true): Boolean {
+        currentCoroutineContext().ensureActive()
         val first = pendingHudFrame ?: return false
+        val counted = pendingHudCount
         pendingHudFrame = null
         if (pendingHudAt > deadline) return false
-        log("登录等待到时，菜单已命中${pendingHudCount}/3帧；最多追加10秒完成确认")
+        if (counted >= 2) {
+            lastHudDetail = first.summary() + "；菜单连续确认成功"
+            log("菜单确认已完成，保留本轮确认结果")
+            return true
+        }
+        if (!allowAdditionalFrames) return false
+        log("登录等待到时，菜单已命中${counted}/2帧；最多追加10秒完成确认")
         return withTimeoutOrNull(10_000L) {
             var previous = first
-            repeat((3 - pendingHudCount).coerceAtLeast(1)) {
-                delay(500)
+            repeat((2 - counted).coerceAtLeast(1)) {
+                delay(300)
                 val shot = device.screenshot() ?: return@withTimeoutOrNull false
                 val next = try {
                     if (shot.width != pendingHudWidth || shot.height != pendingHudHeight) return@withTimeoutOrNull false
@@ -624,31 +632,37 @@ class BotContext(
                 }
                 previous = next
             }
-            lastHudDetail = previous.summary() + "；菜单连续三帧确认成功"
+            lastHudDetail = previous.summary() + "；菜单连续确认成功"
             log(lastHudDetail)
             true
         } ?: false
     }
 
-    suspend fun hasEnteredGame(): Boolean {
-        pendingHudFrame = null
+    /**
+     * Confirm the character HUD. Default is 2 stable frames with a short reuse window so
+     * navigation does not re-scan three full screenshots on every call. Login can request 3.
+     */
+    suspend fun hasEnteredGame(requiredFrames: Int = 2): Boolean {
+        val frames = requiredFrames.coerceIn(1, 3)
+        if (hasFreshHudConfirmation(frames)) return true
+        clearHudConfirmation()
         if (dismissLineSwitch()) return false
         val bundle = hudTemplates()
         hudTemplatesAvailable = bundle != null
         if (bundle == null) return false
         var previous: com.aliothmoon.maahotta.vision.HudDetection? = null
-        repeat(3) { index ->
-            if (index > 0) delay(500)
-            val shot = device.screenshot() ?: return false
+        repeat(frames) { index ->
+            if (index > 0) delay(300)
+            val shot = device.screenshot() ?: run { clearHudConfirmation(); return false }
             hudScreenshotAvailable = true
             val frameHeight = shot.height
             val frameWidth = shot.width
             val detection = try { GameScreenDetector.inspectHud(shot, bundle) }
                 finally { shot.recycle() }
             lastHudDetail = detection.summary()
-            if (!detection.accepted) return false
+            if (!detection.accepted) { clearHudConfirmation(); return false }
             if (previous != null && !GameScreenDetector.stablePair(previous!!, detection, frameHeight)) {
-                pendingHudFrame = null
+                clearHudConfirmation()
                 lastHudDetail += "；菜单位置不稳定"
                 return false
             }
@@ -657,7 +671,11 @@ class BotContext(
             if (index == 0) pendingHudAt = elapsedRealtime()
             pendingHudWidth = frameWidth
             pendingHudHeight = frameHeight
-            lastHudDetail += if (index < 2) "；菜单连续命中${index + 1}/3帧" else "；菜单连续三帧确认成功"
+            lastHudDetail += if (index + 1 < frames) {
+                "；菜单连续命中${index + 1}/${frames}帧"
+            } else {
+                "；菜单连续${frames}帧确认成功"
+            }
             log(lastHudDetail)
             previous = detection
         }
@@ -665,7 +683,7 @@ class BotContext(
     }
 
     fun resetHudDetection() {
-        pendingHudFrame = null
+        clearHudConfirmation()
         lastHudDetail = "尚未执行菜单识别"
         hudTemplatesAvailable = false
         hudScreenshotAvailable = false
@@ -682,7 +700,9 @@ class BotContext(
         val shot = device.screenshot() ?: return GameScreen.OTHER
         val result = try { GameScreenDetector.classify(shot, hudTemplates()) }
             finally { shot.recycle() }
-        return if (result == GameScreen.HUD && !hasEnteredGame()) GameScreen.OTHER else result
+        if (result != GameScreen.HUD) return result
+        // Reuse a fresh confirmation instead of running another multi-frame scan every call.
+        return if (hasEnteredGame(requiredFrames = 2)) GameScreen.HUD else GameScreen.OTHER
     }
 }
 
@@ -712,11 +732,7 @@ class TaskEngine(
             val runner = TaskAttemptRunner(
                 safety = context.safety,
                 log = context.log,
-                detectDisconnect = {
-                    context.dismissDisconnectDialog().also { disconnected ->
-                        if (disconnected) context.invalidateAccountIdentity()
-                    }
-                },
+                detectDisconnect = { false },
                 relogin = relogin?.let { action ->
                     suspend {
                         val loginResult = action()

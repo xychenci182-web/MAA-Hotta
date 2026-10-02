@@ -1,8 +1,10 @@
 # 执行策略离线检查
 
 在仓库根目录运行 `python tests/execution/run.py`。检查直接编译生产代码中的
-`TaskAttemptRunner`、`TaskSafetyState`、`AccountSession`、`AccountIdentity` 和 `RunJournal`，无需 Android SDK、
+`TaskAttemptRunner`、`TaskSafetyState`、`AccountSession`、`AccountIdentity`、`CaptureReadiness` 和 `RunJournal`，无需 Android SDK、
 模拟器或游戏。它也运行 `RunJournalCheck`，再用 Python 独立解析生成的 JSONL。
+
+加载截图检查覆盖首次有效截图后的连续空帧与恢复、固定截止时间、嵌套等待范围、异常与取消后的策略恢复；日常任务仍保持截图不可用时停止、不重放动作。
 
 运行器只读取本地已存在的 Java 和 Kotlin 库，不运行 Gradle，不下载依赖。需要 Python 3.9+
 和已安装的 JDK（验证使用 JDK 21）。默认查找用户 Gradle 缓存中的 Kotlin 2.1.10 或 2.0.21、

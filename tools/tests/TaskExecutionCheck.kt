@@ -4,7 +4,12 @@ import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /** Exercise the production runner without Android or real delays. */
 object TaskExecutionCheck {
@@ -200,6 +205,107 @@ object TaskExecutionCheck {
         check(!state.hasSubmittedAction && state.pendingStepId == null && state.taskId == "second")
         check(runCatching { AccountSession().verify("") }.isFailure)
 
-        println("TaskExecution checks passed: no reward replay, bounded retry/recovery, account identity, cancellation, journal I/O failure")
+        // A ready first frame does not end the login scope: subsequent loading gaps may recover.
+        var recoveryClock = 0L
+        var recoveryCaptures = 0
+        var recoveryReports = 0
+        val recoveryWaits = mutableListOf<Long>()
+        val frames = listOf("first-frame", null, null, null, "recovered-frame")
+        val readiness = CaptureReadiness(
+            now = { recoveryClock },
+            wait = { recoveryWaits += it; recoveryClock += it },
+            onWaiting = { recoveryReports++ },
+        )
+        readiness.within(2_000) {
+            check(readiness.read { frames[recoveryCaptures++] } == "first-frame")
+            check(readiness.read { frames[recoveryCaptures++] } == "recovered-frame")
+        }
+        check(recoveryClock == 1_500L && recoveryCaptures == 5 && recoveryReports == 1)
+        check(recoveryWaits == listOf(500L, 500L, 500L))
+
+        var timeoutClock = 0L
+        var timeoutCaptures = 0
+        var timeoutClicks = 0
+        val timeoutWaits = mutableListOf<Long>()
+        val timedReadiness = CaptureReadiness(
+            now = { timeoutClock },
+            wait = { timeoutWaits += it; timeoutClock += it },
+        )
+        val timedFrame = timedReadiness.within(1_200) {
+            timedReadiness.read<String> { timeoutCaptures++; null }
+        }
+        if (timedFrame != null) timeoutClicks++
+        check(timedFrame == null && timeoutClock == 1_200L && timeoutCaptures == 3 && timeoutClicks == 0)
+        check(timeoutWaits == listOf(500L, 500L, 200L))
+
+        var nestedClock = 0L
+        var nestedCaptures = 0
+        val nestedReadiness = CaptureReadiness(now = { nestedClock }, wait = { nestedClock += it })
+        nestedReadiness.within(1_000) {
+            nestedReadiness.within(10_000) {
+                check(nestedReadiness.read<String> { nestedCaptures++; null } == null)
+            }
+            check(nestedClock == 1_000L && nestedCaptures == 2)
+            check(nestedReadiness.read { nestedCaptures++; "too-late" } == null)
+            check(nestedCaptures == 2)
+        }
+        // Leaving both scopes restores the default policy, including after the former deadline.
+        check(nestedReadiness.read { "fresh-frame" } == "fresh-frame")
+
+        var shorterClock = 0L
+        val shorterReadiness = CaptureReadiness(now = { shorterClock }, wait = { shorterClock += it })
+        shorterReadiness.within(1_500) {
+            shorterReadiness.within(500) {
+                check(shorterReadiness.read<String> { null } == null)
+            }
+            check(shorterClock == 500L)
+            var outerCaptures = 0
+            check(shorterReadiness.read { if (++outerCaptures == 1) null else "outer-frame" } == "outer-frame")
+            check(shorterClock == 1_000L && outerCaptures == 2)
+        }
+
+        var exceptionWaits = 0
+        val exceptionReadiness = CaptureReadiness(now = { 0L }, wait = { exceptionWaits++ })
+        check(runCatching {
+            exceptionReadiness.within(10_000) {
+                exceptionReadiness.read<String> { throw IOException("capture failed") }
+            }
+        }.exceptionOrNull() is IOException)
+        check(exceptionReadiness.read<String> { null } == null && exceptionWaits == 0)
+
+        var ordinaryCaptures = 0
+        var ordinaryWaits = 0
+        val ordinaryReadiness = CaptureReadiness(now = { 0L }, wait = { ordinaryWaits++ })
+        val ordinaryTask = Harness()
+        ordinaryTask.assertNoReplay(ordinaryTask.run {
+            val frame = ordinaryReadiness.read<String> { ordinaryCaptures++; null }
+            if (frame == null) TaskResult.uncertain("task", "capture unavailable")
+            else error("an unavailable frame must not produce an action")
+        })
+        check(ordinaryCaptures == 1 && ordinaryWaits == 0)
+
+        val waitingStarted = CompletableDeferred<Unit>()
+        var stoppedCaptures = 0
+        var stoppedClicks = 0
+        val stopReadiness = CaptureReadiness(
+            now = { 0L },
+            wait = { waitingStarted.complete(Unit); awaitCancellation() },
+        )
+        val loadingJob = launch {
+            stopReadiness.within(10_000) {
+                val frame = stopReadiness.read<String> { stoppedCaptures++; null }
+                if (frame != null) stoppedClicks++
+            }
+        }
+        waitingStarted.await()
+        loadingJob.cancelAndJoin()
+        check(loadingJob.isCancelled && stoppedCaptures == 1 && stoppedClicks == 0)
+        // Cancellation must run within()'s finally; otherwise this read would wait and time out.
+        withTimeout(1_000) {
+            check(stopReadiness.read<String> { stoppedCaptures++; null } == null)
+        }
+        check(stoppedCaptures == 2 && stoppedClicks == 0)
+
+        println("TaskExecution checks passed: no reward replay, bounded retry/recovery, account identity, cancellation, journal I/O failure, loading capture deadlines")
     }
 }

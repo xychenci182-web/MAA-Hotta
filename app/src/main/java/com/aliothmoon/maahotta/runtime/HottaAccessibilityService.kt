@@ -13,6 +13,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.annotation.RequiresApi
 import com.aliothmoon.maahotta.constant.Packages
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -42,7 +43,7 @@ class HottaAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             activeWindowClassName = event.className?.toString()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 event.packageName?.toString() == Packages.OFFICIAL &&
                 event.displayId != Display.INVALID_DISPLAY
             ) {
@@ -117,6 +118,7 @@ class HottaAccessibilityService : AccessibilityService() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     private suspend fun captureShotOnce(displayId: Int): Bitmap? = suspendCancellableCoroutine { cont ->
         try {
             takeScreenshot(

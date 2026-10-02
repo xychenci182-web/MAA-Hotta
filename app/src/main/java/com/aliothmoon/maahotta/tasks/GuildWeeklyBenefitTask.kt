@@ -30,9 +30,19 @@ class GuildWeeklyBenefitTask(
             ?: return TaskResult(title, false, "通用奖励弹窗模板未载入")
         val openTemplate = ctx.templates.get("guild_weekly_open")
             ?: return TaskResult(title, false, "公会周奖励 OPEN 模板未载入")
+        val claimedTemplate = ctx.templates.get("guild_weekly_claimed")
+            ?: return TaskResult(title, false, "公会周奖励下周可领取模板未载入")
 
         if (!openWeeklyBenefitPage(ctx)) {
             return failAndExit(ctx, "未能进入公会福利页")
+        }
+
+        if (ctx.waitUntil(2_000, 320) { screen ->
+                GuildScreenDetector.findWeeklyClaimed(screen, claimedTemplate)?.copy(requiresStableFrames = true)
+            } != null) {
+            ctx.log("公会福利页已连续确认下周可领取，本周奖励已领取")
+            return finish(ctx, "本周奖励已领取，下周可领取")
+                .let { if (it.ok) it.copy(outcome = com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED) else it }
         }
 
         val claimTarget = findClaimTarget(ctx, openTemplate)

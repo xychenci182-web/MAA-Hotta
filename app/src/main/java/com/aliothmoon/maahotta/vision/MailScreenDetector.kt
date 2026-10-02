@@ -16,6 +16,9 @@ object MailScreenDetector {
     fun findSocialMenu(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, socialMenuRegion, 0.52f)
 
+    fun findSocialPageTitle(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, SearchRegion(0.08f, 0.01f, 0.23f, 0.10f), 0.80f)
+
     fun findMailTab(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, mailTabRegion, 0.55f)
 
@@ -35,7 +38,7 @@ object MailScreenDetector {
         threshold: Float,
     ): MatchResult? {
         if (template == null) return null
-        val scales = floatArrayOf(0.78f, 0.90f, 1f, 1.12f, 1.26f)
+        val scales = floatArrayOf(1f, 0.90f, 1.12f, 0.78f, 1.26f)
         var best: MatchResult? = null
         for (scale in scales) {
             val candidate = if (scale == 1f) {
@@ -58,6 +61,7 @@ object MailScreenDetector {
                     referenceHeight = 596,
                 )
                 if (match != null && match.score > (best?.score ?: -1f)) best = match
+                if (match != null && match.score >= maxOf(threshold, 0.92f)) return match
             } finally {
                 if (candidate !== template) candidate.recycle()
             }

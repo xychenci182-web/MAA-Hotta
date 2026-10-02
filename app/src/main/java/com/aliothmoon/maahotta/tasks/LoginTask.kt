@@ -5,6 +5,7 @@ import com.aliothmoon.maahotta.constant.Packages
 import com.aliothmoon.maahotta.data.GameAccount
 import com.aliothmoon.maahotta.engine.BotContext
 import com.aliothmoon.maahotta.engine.AccountIdentity
+import com.aliothmoon.maahotta.engine.AccountSession
 import com.aliothmoon.maahotta.engine.GameTask
 import com.aliothmoon.maahotta.engine.TaskResult
 import com.aliothmoon.maahotta.vision.TemplateMatcher
@@ -30,68 +31,99 @@ class LoginTask(
     override fun allowEngineRetry(): Boolean = false
     override fun allowEngineRelogin(): Boolean = false
     private var finalHudConfirmationAllowed = false
+    private val loginIdentity = AccountSession()
 
     private data class PhonePage(val nextPoint: Point?)
     private data class PasswordPage(val fieldId: String?, val fieldPoint: Point?)
     private sealed interface LoginEntry {
         data class Phone(val page: PhonePage) : LoginEntry
         data class Password(val page: PasswordPage, val shownPhone: String?) : LoginEntry
-        data object GameEntered : LoginEntry
+        data class GameEntered(val verifiedAccountId: String? = null) : LoginEntry
         data class Failure(val reason: String) : LoginEntry
     }
 
     override suspend fun run(ctx: BotContext): TaskResult {
+        loginIdentity.invalidate()
         ctx.invalidateAccountIdentity()
         val login = if (verificationOnly) verifyExistingAccount(ctx) else runLogin(ctx)
-        // A HUD proves that a login finished; audit the current account before allowing daily actions.
-        val result = if (!verificationOnly && login.ok) verifyExistingAccount(ctx) else login
-        if (result.ok) ctx.confirmAccountIdentity(account.id)
+        // Reuse only this attempt's User Center proof; submitting credentials requires a fresh audit.
+        val result = if (!verificationOnly && login.ok && !loginIdentity.isVerifiedFor(account.id)) {
+            ctx.log("主界面已确认，开始核验当前账号")
+            verifyExistingAccount(ctx)
+        } else login
+        if (result.ok) {
+            ctx.confirmAccountIdentity(account.id)
+            ctx.log("账号身份与主界面均已确认，登录完成")
+        }
         return result
     }
 
     /** Disabling automatic login still requires identity proof, but never switches or enters credentials. */
     private suspend fun verifyExistingAccount(ctx: BotContext): TaskResult {
         ctx.resetHudDetection()
+        val verificationDeadline = ctx.elapsedRealtime() + 120_000L
+        var identityMatched = false
         return withTimeoutOrNull(120_000L) {
-            awaitGameCapture(ctx)
-            val userCenterVisible = ctx.device.viewInfo("lib_change_account") != null ||
-                accountOverlay(ctx, AccountScreenDetector::isUserCenter)
-            if (!userCenterVisible && !openUserCenterFromGame(ctx)) {
-                return@withTimeoutOrNull TaskResult.uncertain(title, "未能进入用户中心核验账号")
-            }
-            val deadline = ctx.elapsedRealtime() + 8_000L
-            var matched = false
-            while (ctx.elapsedRealtime() < deadline) {
-                val center = ctx.device.viewInfo("lib_change_account") != null ||
-                    accountOverlay(ctx, AccountScreenDetector::isUserCenter)
-                if (center) {
-                    val shown = ctx.device.viewInfo("lib_account")?.text ?: ctx.device.maskedAccountPhone()
-                    if (sameSavedPhone(shown)) { matched = true; break }
+            ctx.withLoginCaptureDeadline(verificationDeadline) verification@{
+                awaitGameCapture(ctx)
+                var userCenterReady = false
+                while (ctx.elapsedRealtime() < verificationDeadline) {
+                    if (ctx.device.viewInfo("lib_change_account") != null ||
+                        accountOverlay(ctx, AccountScreenDetector::isUserCenter)) {
+                        userCenterReady = true
+                        break
+                    }
+                    if (ctx.gameScreen() in setOf(GameScreen.HUD, GameScreen.MENU, GameScreen.SETTINGS)) {
+                        if (!openUserCenterFromGame(ctx)) {
+                            return@verification TaskResult.uncertain(title, "已确认游戏界面，但未能进入用户中心核验账号")
+                        }
+                        userCenterReady = true
+                        break
+                    }
+                    delay(500) // A valid screenshot of a loading screen is still not permission to navigate.
                 }
-                delay(400)
+                if (!userCenterReady) return@verification TaskResult.uncertain(title, "未在核验等待时间内确认可操作的游戏界面")
+                var matched = false
+                while (ctx.elapsedRealtime() < verificationDeadline) {
+                    val center = ctx.device.viewInfo("lib_change_account") != null ||
+                        accountOverlay(ctx, AccountScreenDetector::isUserCenter)
+                    if (center) {
+                        val shown = ctx.device.viewInfo("lib_account")?.text ?: ctx.device.maskedAccountPhone()
+                        if (sameSavedPhone(shown)) { matched = true; identityMatched = true; break }
+                        if (shown?.contains(Regex("[0-9]{3}\\*+[0-9]{4}|[0-9]{11}")) == true) {
+                            return@verification TaskResult.uncertain(title, "当前账号与所选账号不一致或掩码存在冲突")
+                        }
+                    }
+                    delay(400)
+                }
+                if (!matched) return@verification TaskResult.uncertain(title, "在核验等待时间内未能读取账号身份")
+                if (!ctx.device.clickView("lib_close") && !ctx.device.clickView("lib_goback")) {
+                    tapAccountAnchor(ctx, 211f, 28f)
+                }
+                var returnedToGame = false
+                while (ctx.elapsedRealtime() < verificationDeadline) {
+                    delay(400)
+                    val screen = ctx.device.screenshot() ?: continue
+                    val stillVisible = try {
+                        AccountScreenDetector.isUserCenter(screen) || ctx.device.viewInfo("lib_change_account") != null
+                    } finally { screen.recycle() }
+                    if (stillVisible) continue
+                    when (ctx.gameScreen()) {
+                        GameScreen.SETTINGS -> {
+                            leaveSettingsAndEnter(ctx)
+                            returnedToGame = true
+                            break
+                        }
+                        GameScreen.HUD -> { returnedToGame = true; break }
+                        else -> Unit // Loading or unknown: wait without clicking.
+                    }
+                }
+                if (!returnedToGame) return@verification TaskResult.uncertain(title, "账号已核对，但未在等待时间内确认返回游戏")
+                waitEntered(ctx)
             }
-            if (!matched) return@withTimeoutOrNull TaskResult.uncertain(title, "当前账号与所选账号不一致、掩码存在冲突或无法核对，停止日常")
-            if (!ctx.device.clickView("lib_close") && !ctx.device.clickView("lib_goback")) {
-                tapAccountAnchor(ctx, 211f, 28f)
-            }
-            val closeDeadline = ctx.elapsedRealtime() + 5_000L
-            var centerGone = false
-            while (ctx.elapsedRealtime() < closeDeadline) {
-                delay(400)
-                val screen = ctx.device.screenshot() ?: continue
-                val stillVisible = try {
-                    AccountScreenDetector.isUserCenter(screen) || ctx.device.viewInfo("lib_change_account") != null
-                } finally { screen.recycle() }
-                if (!stillVisible) { centerGone = true; break }
-            }
-            if (!centerGone) return@withTimeoutOrNull TaskResult.uncertain(title, "账号已核对，但未确认用户中心关闭")
-            when (ctx.gameScreen()) {
-                GameScreen.SETTINGS -> leaveSettingsAndEnter(ctx)
-                GameScreen.HUD -> Unit
-                else -> return@withTimeoutOrNull TaskResult.uncertain(title, "账号中心关闭后的页面无法确认")
-            }
-            waitEntered(ctx)
-        } ?: TaskResult.uncertain(title, "账号核验超时，停止日常")
+        } ?: if (identityMatched && ctx.finishPendingHudConfirmation(verificationDeadline, allowAdditionalFrames = false)) {
+            TaskResult(title, true, "账号与游戏主界面均已确认")
+        } else TaskResult.uncertain(title, "账号核验超时，停止日常")
     }
 
     private suspend fun runLogin(ctx: BotContext): TaskResult {
@@ -111,10 +143,12 @@ class LoginTask(
         // Return a normal failure so the existing diagnostic/report path runs.
         val loginDeadline = ctx.elapsedRealtime() + 120_000L
         val entry = withTimeoutOrNull(120_000L) {
-            awaitGameCapture(ctx)
-            waitForLoginEntry(ctx, forceSwitchWithoutVerification)
+            ctx.withLoginCaptureDeadline(loginDeadline) {
+                awaitGameCapture(ctx)
+                waitForLoginEntry(ctx, forceSwitchWithoutVerification)
+            }
         } ?: if (finalHudConfirmationAllowed && ctx.finishPendingHudConfirmation(loginDeadline)) {
-            LoginEntry.GameEntered
+            LoginEntry.GameEntered(loginIdentity.verifiedAccountId)
         } else null
             ?: return TaskResult(
                 title,
@@ -122,75 +156,80 @@ class LoginTask(
                 "登录画面识别超时：等待120秒仍未确认登录页面或游戏主界面，已终止任务（${ctx.hudDetectionSummary()}）",
                 retryable = false,
             )
-        if (entry == LoginEntry.GameEntered) {
+        if (entry is LoginEntry.GameEntered) {
+            if (entry.verifiedAccountId != account.id) loginIdentity.invalidate()
             return TaskResult(title, true, "已进入游戏主界面")
         }
         if (entry is LoginEntry.Failure) {
             return TaskResult(title, false, entry.reason)
         }
-        if (entry is LoginEntry.Password) {
-            if (!sameSavedPhone(entry.shownPhone)) {
-                return TaskResult(title, false, "密码页账号与所选手机号不一致或无法核对")
-            }
-            ctx.log("密码页显示的账号与所选手机号一致")
-            return completePasswordLogin(ctx, entry.page)
-        }
-        val phonePage = (entry as LoginEntry.Phone).page
-        val phone = account.username.trim().removePrefix("+86")
-        if (phone.isEmpty() || !phone.all { it in '0'..'9' }) {
-            return TaskResult(title, false, "通行证账号须填写不含区号的手机号")
-        }
-        if (account.password.isEmpty()) {
-            return TaskResult(title, false, "未填写密码")
-        }
-        if (!agreeToTerms(ctx, phonePage)) {
-            return TaskResult(title, false, "无法确认用户协议已勾选")
-        }
-        if (!enterPhone(ctx, phonePage, phone)) {
-            return TaskResult(title, false, "手机号未能写入输入框")
-        }
-        if (!clickNext(ctx, phonePage)) {
-            return TaskResult(title, false, "找不到“下一步”按钮")
-        }
+        loginIdentity.invalidate()
+        ctx.resetHudDetection()
+        // Credential submission and its transitions share a fixed budget. Missing frames never replay input.
+        val credentialDeadline = ctx.elapsedRealtime() + 120_000L
+        return withTimeoutOrNull(120_000L) {
+            ctx.withLoginCaptureDeadline(credentialDeadline) credentials@{
+                if (entry is LoginEntry.Password) {
+                    if (!sameSavedPhone(entry.shownPhone)) {
+                        return@credentials TaskResult(title, false, "密码页账号与所选手机号不一致或无法核对")
+                    }
+                    ctx.log("密码页显示的账号与所选手机号一致")
+                    return@credentials completePasswordLogin(ctx, entry.page, credentialDeadline)
+                }
+                val phonePage = (entry as LoginEntry.Phone).page
+                val phone = account.username.trim().removePrefix("+86")
+                if (phone.isEmpty() || !phone.all { it in '0'..'9' }) {
+                    return@credentials TaskResult(title, false, "通行证账号须填写不含区号的手机号")
+                }
+                if (account.password.isEmpty()) {
+                    return@credentials TaskResult(title, false, "未填写密码")
+                }
+                if (!agreeToTerms(ctx, phonePage)) {
+                    return@credentials TaskResult(title, false, "无法确认用户协议已勾选")
+                }
+                if (!enterPhone(ctx, phonePage, phone)) {
+                    return@credentials TaskResult(title, false, "手机号未能写入输入框")
+                }
+                if (!clickNext(ctx, phonePage)) {
+                    return@credentials TaskResult(title, false, "找不到“下一步”按钮")
+                }
 
-        val passwordPage = waitForPasswordPage(ctx)
-            ?: return TaskResult(title, false, "点击下一步后仍未进入密码页")
-        return completePasswordLogin(ctx, passwordPage)
+                val passwordPage = waitForPasswordPage(ctx, credentialDeadline)
+                    ?: return@credentials TaskResult(title, false, "点击下一步后仍未进入密码页")
+                completePasswordLogin(ctx, passwordPage, credentialDeadline)
+            }
+        } ?: if (ctx.finishPendingHudConfirmation(credentialDeadline, allowAdditionalFrames = false)) {
+            TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
+        } else TaskResult.uncertain(title, "登录提交与游戏加载等待120秒仍未确认完成，已停止")
     }
 
-    private suspend fun completePasswordLogin(ctx: BotContext, passwordPage: PasswordPage): TaskResult {
+    private suspend fun completePasswordLogin(ctx: BotContext, passwordPage: PasswordPage, deadline: Long): TaskResult {
         if (!enterPassword(ctx, passwordPage)) {
             return TaskResult(title, false, "密码未能写入输入框")
         }
-        repeat(3) { attempt ->
-            if (!clickLogin(ctx)) {
-                return TaskResult(title, false, "找不到密码页的登录按钮")
-            }
-            if (waitForPasswordPageExit(ctx)) {
-                ctx.log("已确认离开密码页，继续验证进入游戏")
-                return waitEntered(ctx)
-            }
-            if (attempt < 2) {
-                ctx.log("尚未确认离开密码页，重新识别并点击登录按钮（第${attempt + 2}次）")
-            }
+        if (!clickLogin(ctx)) {
+            return TaskResult(title, false, "找不到密码页的登录按钮")
         }
-        return TaskResult(title, false, "点击登录按钮3次后仍未确认离开密码页，密码提交未确认成功")
+        if (!waitForPasswordPageExit(ctx, deadline)) {
+            return TaskResult.uncertain(title, "登录提交后未在等待时间内确认离开密码页，停止且不重复提交")
+        }
+        ctx.log("已确认离开密码页，继续验证进入游戏")
+        return waitEntered(ctx)
     }
 
-    private suspend fun waitForPasswordPageExit(ctx: BotContext): Boolean {
-        val deadline = ctx.elapsedRealtime() + 8_000L
+    private suspend fun waitForPasswordPageExit(ctx: BotContext, deadline: Long): Boolean {
         var absentFrames = 0
         val passwordTemplate = ctx.templates.get("pwd_password")
         while (ctx.elapsedRealtime() < deadline) {
             delay(500)
-            val passwordFieldVisible = listOf("lib_password", "lib_pwd", "lib_login_password")
-                .any { ctx.device.viewInfo(it) != null }
             val screen = ctx.device.screenshot()
             if (screen == null) {
                 absentFrames = 0
                 continue
             }
             val passwordPageVisible = try {
+                val passwordFieldVisible = listOf("lib_password", "lib_pwd", "lib_login_password")
+                    .any { ctx.device.viewInfo(it) != null }
                 passwordFieldVisible || AccountScreenDetector.findPasswordSubmit(screen) != null ||
                     (passwordTemplate != null && TemplateMatcher.match(
                         screen,
@@ -259,18 +298,21 @@ class LoginTask(
         var lastHudWaitLog = 0L
         while (true) {
             currentCoroutineContext().ensureActive()
+            if (forceSwitchWithoutVerification || waitingForAccountList || waitingForOtherLogin || switchedAccount) {
+                loginIdentity.invalidate()
+            }
             // Once the account was checked, use the first fresh frame to
             // recognize the HUD. Popup overlays are excluded in this check.
             val accountFlowActive = waitingForUserCenter ||
                 waitingForAccountList || waitingForOtherLogin
             if (accountChecked && !accountFlowActive) {
                 finalHudConfirmationAllowed = !forceSwitchWithoutVerification || switchedAccount
-                if (ctx.hasEnteredGame()) {
+                if (ctx.hasEnteredGame(requiredFrames = 3)) {
                     if (forceSwitchWithoutVerification && !switchedAccount) {
                         return LoginEntry.Failure("尚未执行切换账号就返回了游戏主界面")
                     }
-                    ctx.log("菜单连续三帧确认，登录成功")
-                    return LoginEntry.GameEntered
+                    ctx.log("菜单连续确认，已进入游戏主界面")
+                    return LoginEntry.GameEntered(loginIdentity.verifiedAccountId)
                 }
                 finalHudConfirmationAllowed = false
                 val now = ctx.elapsedRealtime()
@@ -292,8 +334,17 @@ class LoginTask(
                 continue
             }
             if (ctx.dismissRewardRecoveryPopup()) continue
-            if (ctx.dismissDisconnectDialog()) {
-                delay(800)
+            if (!accountChecked && !accountFlowActive && accountOverlay(ctx) {
+                    TitleScreenDetector.findUnobstructedEntry(it) != null
+                }) {
+                if (settingsOpenAttempts++ >= 3) return LoginEntry.Failure("无法从游戏首页打开设置")
+                waitingForUserCenter = true
+                ctx.log("已确认无遮挡游戏首页，点击齿轮核对账号")
+                tapTitleSettingsGear(ctx)
+                ctx.log("齿轮后识别用户中心按钮")
+                tapRecognizedUserCenter(ctx)
+                lastUserCenterTap = ctx.elapsedRealtime()
+                delay(700)
                 continue
             }
             if (waitingForOtherLogin) {
@@ -366,6 +417,7 @@ class LoginTask(
                 ctx.device.viewInfo("lib_add_new_account") != null ||
                 ctx.device.viewInfo("lib_add_account_layout") != null
             if (accountListControlVisible || (accountListVisible && shownPasswordPhone == null)) {
+                loginIdentity.invalidate()
                 if (addAccountAttempts++ >= 3) {
                     return LoginEntry.Failure("无法从账号列表进入添加新账号")
                 }
@@ -449,6 +501,7 @@ class LoginTask(
                 val shown = ctx.device.viewInfo("lib_account")?.text
                     ?: ctx.device.maskedAccountPhone()
                 if (!forceSwitchWithoutVerification && sameSavedPhone(shown)) {
+                    loginIdentity.verify(account.id)
                     ctx.log("用户中心显示的账号与所选手机号一致")
                     if (!ctx.device.clickView("lib_close") &&
                         !ctx.device.clickView("lib_goback")
@@ -459,6 +512,7 @@ class LoginTask(
                     delay(600)
                     leaveSettingsAndEnter(ctx)
                 } else {
+                    loginIdentity.invalidate()
                     if (switchAttempts++ >= 3) {
                         return LoginEntry.Failure("无法切换当前账号")
                     }
@@ -590,6 +644,7 @@ class LoginTask(
     }
 
     private suspend fun handleQuickLogin(ctx: BotContext, switchedAccount: Boolean) {
+        loginIdentity.invalidate()
         if (switchedAccount) {
             ctx.log("已执行切换账号，点击其他登录方式")
             if (!ctx.device.clickText("其他登录方式") &&
@@ -693,7 +748,7 @@ class LoginTask(
                 return@repeat
             }
 
-            val menuButton = ctx.waitUntil(900, 300) { screen ->
+            val menuButton = ctx.waitUntil(5_000, 300) { screen ->
                 AccountTransitionScreenDetector.findHudMenu(screen, hudMenu)
             }
             if (menuButton != null) {
@@ -783,8 +838,7 @@ class LoginTask(
         return true
     }
 
-    private suspend fun waitForPasswordPage(ctx: BotContext): PasswordPage? {
-        val deadline = ctx.deadlineAfter(15_000)
+    private suspend fun waitForPasswordPage(ctx: BotContext, deadline: Long): PasswordPage? {
         while (ctx.elapsedRealtime() < deadline) {
             for (id in listOf("lib_password", "lib_pwd", "lib_login_password")) {
                 if (ctx.device.viewInfo(id) != null) {
@@ -834,25 +888,26 @@ class LoginTask(
 
     private suspend fun waitEntered(ctx: BotContext): TaskResult {
         val deadline = ctx.deadlineAfter(120_000)
-        while (ctx.elapsedRealtime() < deadline) {
-            if (ctx.hasEnteredGame()) {
-                ctx.log("菜单连续三帧确认，登录成功")
-                return TaskResult(title, true, "已进入游戏主界面")
-            }
-            if (ctx.dismissAnnouncement()) continue
-            if (ctx.dismissRewardRecoveryPopup(allowOcr = true)) continue
-            if (ctx.dismissDisconnectDialog()) {
-                continue
-            }
-            if (ctx.enterFromTitle()) {
-                continue
-            }
+        return ctx.withLoginCaptureDeadline(deadline) {
+            withTimeoutOrNull((deadline - ctx.elapsedRealtime()).coerceAtLeast(1L)) {
+                while (ctx.elapsedRealtime() < deadline) {
+                    if (ctx.hasEnteredGame(requiredFrames = 3)) {
+                        ctx.log("菜单连续确认，已进入游戏主界面")
+                        return@withTimeoutOrNull TaskResult(title, true, "已进入游戏主界面")
+                    }
+                    if (ctx.dismissAnnouncement()) continue
+                    if (ctx.dismissRewardRecoveryPopup(allowOcr = true)) continue
+                    if (ctx.enterFromTitle()) {
+                        continue
+                    }
+                }
+                TaskResult(
+                    title,
+                    false,
+                    "已提交密码，但未能确认进入游戏（${ctx.hudDetectionSummary()}）",
+                )
+            } ?: TaskResult.uncertain(title, "等待游戏加载超时，未确认进入主界面（${ctx.hudDetectionSummary()}）")
         }
-        return TaskResult(
-            title,
-            false,
-            "已提交密码，但未能确认进入游戏（${ctx.hudDetectionSummary()}）",
-        )
     }
 
     private fun relativeToNext(ctx: BotContext, next: Point, dx: Float, dy: Float): Point {

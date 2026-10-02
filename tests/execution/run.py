@@ -71,6 +71,7 @@ def main() -> None:
         REPOSITORY / "app/src/main/java/com/aliothmoon/maahotta/engine/TaskExecution.kt",
         REPOSITORY / "app/src/main/java/com/aliothmoon/maahotta/engine/RunJournal.kt",
         REPOSITORY / "app/src/main/java/com/aliothmoon/maahotta/engine/AccountIdentity.kt",
+        REPOSITORY / "app/src/main/java/com/aliothmoon/maahotta/engine/CaptureReadiness.kt",
         REPOSITORY / "tools/tests/TaskExecutionCheck.kt",
         REPOSITORY / "tools/tests/RunJournalCheck.kt",
     ]

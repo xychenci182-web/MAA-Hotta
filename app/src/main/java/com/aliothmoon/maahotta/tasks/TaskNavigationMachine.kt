@@ -41,7 +41,9 @@ internal object TaskNavigationMachine {
         })
     }
 
-    suspend fun reach(ctx: BotContext, goal: NavigationGoal, timeoutMs: Long = 45_000, allowRecovery: Boolean = true): Boolean {
+    // A route can contain loading plus several independently confirmed page hops.
+    // Keep a bounded budget that covers those hops on the 1280×720 emulator.
+    suspend fun reach(ctx: BotContext, goal: NavigationGoal, timeoutMs: Long = 90_000, allowRecovery: Boolean = true): Boolean {
         val deadline = ctx.elapsedRealtime() + timeoutMs
         var previous: PageObservation? = null
         var stable = 0
@@ -87,7 +89,7 @@ internal object TaskNavigationMachine {
             if ((attempts[key] ?: 0) >= 3) {
                 val canRecover = page.state in setOf(PageState.MENU, PageState.SOCIAL, PageState.MAIL,
                     PageState.WELFARE, PageState.SIGN_IN, PageState.SUPPLY, PageState.HUB,
-                    PageState.GUILD, PageState.GUILD_DAILY, PageState.GUILD_INFO, PageState.SETTINGS)
+                    PageState.GUILD, PageState.GUILD_DAILY, PageState.GUILD_INFO, PageState.GUILD_WELFARE, PageState.SETTINGS)
                 if (allowRecovery && !recoveryUsed && canRecover && goal != NavigationGoal.HUD) {
                     recoveryUsed = true
                     ctx.log("页面跳转重试仍失败，按已确认状态恢复主界面，再尝试一次任务导航")

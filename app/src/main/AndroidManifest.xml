@@ -67,13 +67,6 @@
         </service>
 
         <service
-            android:name=".runtime.ShellUserService"
-            android:enabled="true"
-            android:exported="true"
-            android:process=":shizuku"
-            tools:ignore="ExportedService" />
-
-        <service
             android:name=".overlay.OverlayService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

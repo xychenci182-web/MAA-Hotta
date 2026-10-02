@@ -70,14 +70,18 @@ object GameScreenDetector {
 
     private fun matchFeature(screen: Bitmap, template: Bitmap, region: SearchRegion, smooth: Boolean = false): MatchResult? {
         var best: MatchResult? = null
-        for (scale in floatArrayOf(0.78f, 0.90f, 1f, 1.10f, 1.22f)) {
+        // Prefer native scale first and stop early on a strong hit to cut HUD latency.
+        for (scale in floatArrayOf(1f, 0.90f, 1.10f, 0.78f, 1.22f)) {
             val candidate = if (scale == 1f) template else Bitmap.createScaledBitmap(template,
                 (template.width * scale).roundToInt().coerceAtLeast(4),
                 (template.height * scale).roundToInt().coerceAtLeast(4), true)
             try {
                 val hit = TemplateMatcher.match(screen, candidate, threshold = -1f, step = 1,
                     region = region, referenceHeight = 528, smooth = smooth)
-                if (hit != null && hit.score > (best?.score ?: -1f)) best = hit
+                if (hit != null && hit.score > (best?.score ?: -1f)) {
+                    best = hit
+                    if (hit.score >= 0.88f) return best
+                }
             } finally { if (candidate !== template) candidate.recycle() }
         }
         return best

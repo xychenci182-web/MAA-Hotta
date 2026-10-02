@@ -73,6 +73,7 @@ Android Studio 左侧：`app` → `src` → `main` → `assets` → `templates`
 | bygone_exit_confirm.png | 旧日幻想退出弹窗“确定”按钮 |
 | hud_hex_menu_icon.png | 游戏主界面右上角六边形菜单图标 |
 | guild_menu_entry.png | 展开菜单中的“公会”按键 |
+| guild_page_title.png | 公会页面固定标题，快速确认信息、日常与福利页 |
 | guild_daily_tab.png | 公会页面底部“日常”页签 |
 | guild_donate_now.png | 公会日常“立即捐献”按钮 |
 | guild_donate_confirm_text.png | “是否确认捐献1个”确认文字 |
@@ -82,7 +83,10 @@ Android Studio 左侧：`app` → `src` → `main` → `assets` → `templates`
 | guild_info_tab.png | 公会页面底部“信息”页签 |
 | guild_rewards_row.png | 公会信息页顶部六个奖励栏 |
 | guild_weekly_open.png | 公会福利页右下角 OPEN 周奖励按钮 |
+| guild_weekly_claimed.png | 公会福利页“下周可领取”，确认本周奖励已领取 |
+| guild_donation_tab.png | 公会日常页左侧“募捐”，从福利页返回捐献页 |
 | menu_social_entry.png | 展开菜单中的“社交”按键 |
+| social_page_title.png | 社交和邮件页固定标题，快速确认页面类别 |
 | social_mail_tab.png | 社交页左侧未选中的“邮件”入口 |
 | social_mail_selected.png | 邮件页左侧选中的“邮件”页签 |
 | mail_claim_all.png | 邮件页右下角“一键领取”按钮 |

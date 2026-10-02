@@ -16,6 +16,7 @@ class MailTask : GameTask {
         if (!ctx.preserveTaskPage && !TaskNavigationMachine.reach(ctx, NavigationGoal.MAIL)) return stop(ctx, "无法进入邮件页")
         var claimAt = 0L
         var rewardSeen = false
+        var rewardAppeared = false
         var rewardFrames = 0
         var closeAttempts = 0
         var lastCloseAt = 0L
@@ -25,6 +26,7 @@ class MailTask : GameTask {
             val page = TaskNavigationMachine.observe(ctx, NavigationGoal.MAIL)
             when (page.state) {
                 PageState.REWARD -> {
+                    if (claimAt != 0L) rewardAppeared = true
                     rewardFrames++
                     if (claimAt != 0L && rewardFrames >= 2) rewardSeen = true
                     mailFrames = 0
@@ -51,6 +53,13 @@ class MailTask : GameTask {
                         ctx.confirmActionResult()
                         ctx.log("邮件任务完成，保留邮件页；下一任务按当前状态选择路径")
                         return TaskResult(title, true, "已领取邮件奖励")
+                    } else if (!rewardAppeared && mailFrames >= 3 && ctx.elapsedRealtime() - claimAt >= 10_000) {
+                        // The game leaves an empty mailbox unchanged after Claim All;
+                        // it shows neither a toast nor a result popup. Submit once and
+                        // allow delayed rewards before accepting the stable mail page.
+                        ctx.confirmActionResult()
+                        ctx.log("一键领取后邮件页保持稳定，等待10秒未出现奖励，当前无可领取邮件")
+                        return TaskResult.alreadyCompleted(title, "无可领取邮件奖励")
                     }
                 }
                 else -> {

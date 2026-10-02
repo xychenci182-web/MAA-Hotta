@@ -24,7 +24,8 @@ class CheckInTask(
 
     private sealed interface ClaimState {
         data class Available(val point: Point) : ClaimState
-        data object AlreadyClaimed : ClaimState
+        /** Rightmost claimed day ordinal 0..7; 7 means D7 is checked and today is done. */
+        data class AlreadyClaimed(val lastClaimedDay: Int) : ClaimState
     }
 
     override suspend fun run(ctx: BotContext): TaskResult {
@@ -71,12 +72,24 @@ class CheckInTask(
 
         val claim = when (val state = waitForClaimState(ctx)) {
             is ClaimState.Available -> state.point
-            ClaimState.AlreadyClaimed -> {
-                ctx.log("连续确认全部七日签到对勾，本轮签到奖励已全部领取")
-                return finish(ctx, true, "七日签到奖励已全部领取")
+            is ClaimState.AlreadyClaimed -> {
+                val detail = if (state.lastClaimedDay >= 7) {
+                    ctx.log("签到页稳定：D7 已打勾，本轮签到已完成")
+                    "今日签到已领取（D7 已打勾）"
+                } else if (state.lastClaimedDay <= 0) {
+                    ctx.log("签到页稳定：无对勾且 D1 无可领取高亮，今日签到已完成")
+                    "今日签到已领取，无待领取奖励"
+                } else {
+                    val nextDay = state.lastClaimedDay + 1
+                    ctx.log(
+                        "签到页稳定：最右对勾为 D${state.lastClaimedDay}，D$nextDay 无可领取高亮，今日签到已完成",
+                    )
+                    "今日签到已领取，无待领取奖励"
+                }
+                return finish(ctx, true, detail)
                     .let { if (it.ok) it.copy(outcome = com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED) else it }
             }
-            null -> return failUnknown(ctx, "签到页未确认可领取高亮；历史对勾不能证明今日已签到，结果不明")
+            null -> return failUnknown(ctx, "签到页未确认下一格可领取高亮，也无法稳定确认今日已领取，结果不明")
         }
         val rewardPopupTemplate = ctx.templates.get("mail_reward_popup")
         val xRatio = claim.x.toFloat() / ctx.device.screenSize().x
@@ -106,23 +119,57 @@ class CheckInTask(
     }
 
     private suspend fun waitForClaimState(ctx: BotContext): ClaimState? {
-        var alreadyClaimed = false
-        val found = ctx.waitUntil(2_500, 500) { screen ->
-            alreadyClaimed = false
-            if (!CheckInScreenDetector.isSignInPage(screen)) {
+        var alreadyClaimedDay: Int? = null
+        var observedLastClaimed: Int? = null
+        var observedSince = 0L
+        var stableFrames = 0
+        fun resetCompletedEvidence() {
+            observedLastClaimed = null
+            observedSince = 0L
+            stableFrames = 0
+        }
+        val found = ctx.waitUntil(8_000, 500) { screen ->
+            alreadyClaimedDay = null
+            // Route by the rightmost check only: no checks → inspect D1; D4 checked → D5;
+            // D7 checked → today is done. Do not wrap D7 back to D1 on the same day.
+            val lastClaimed = CheckInScreenDetector.lastClaimedDay(screen)
+            if (lastClaimed == null) {
+                resetCompletedEvidence()
                 return@waitUntil null
             }
-            val available = CheckInScreenDetector.findClaimable(screen)
+            if (lastClaimed >= 7) {
+                val now = ctx.elapsedRealtime()
+                if (observedLastClaimed != 7) {
+                    observedLastClaimed = 7
+                    observedSince = now
+                    stableFrames = 1
+                    return@waitUntil null
+                }
+                stableFrames++
+                if (stableFrames < 3 || now - observedSince < 2_000L) return@waitUntil null
+                alreadyClaimedDay = 7
+                return@waitUntil center(screen)
+            }
+            val available = CheckInScreenDetector.nextClaimable(screen)
             if (available != null) return@waitUntil available
-            if (CheckInScreenDetector.hasPossibleClaimable(screen) ||
-                !CheckInScreenDetector.hasAllClaimChecks(screen)
-            ) {
+            // Only the next slot after the rightmost check may still be lighting up.
+            if (CheckInScreenDetector.hasPossibleNextClaimable(screen)) {
+                resetCompletedEvidence()
                 return@waitUntil null
             }
-            alreadyClaimed = true
-            center(screen).copy(requiresStableFrames = true)
+            val now = ctx.elapsedRealtime()
+            if (observedLastClaimed != lastClaimed) {
+                observedLastClaimed = lastClaimed
+                observedSince = now
+                stableFrames = 1
+                return@waitUntil null
+            }
+            stableFrames++
+            if (stableFrames < 3 || now - observedSince < 2_000L) return@waitUntil null
+            alreadyClaimedDay = lastClaimed
+            center(screen)
         } ?: return null
-        return if (alreadyClaimed) ClaimState.AlreadyClaimed else ClaimState.Available(found.point)
+        return alreadyClaimedDay?.let(ClaimState::AlreadyClaimed) ?: ClaimState.Available(found.point)
     }
 
     private suspend fun closeRewardPopup(ctx: BotContext, template: Bitmap?, xRatio: Float): Boolean {

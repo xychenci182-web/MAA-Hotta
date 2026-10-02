@@ -5,7 +5,7 @@ enum class PageState(val label: String) {
     SOCIAL("社交页"), MAIL("邮件页"), WELFARE("福利页"), SIGN_IN("签到页"), SUPPLY("执行供给页"),
     HUB("必做页"), KITCHEN("私厨页"), TRIALS("次元历练窗口"), TRIALS_PROXY("代理战斗确认"),
     TRIALS_RESULT("历练作战成功"), ISLAND("人工岛页"),
-    GUILD("公会页"), GUILD_DAILY("公会日常页"), GUILD_INFO("公会信息页"),
+    GUILD("公会页"), GUILD_DAILY("公会日常页"), GUILD_INFO("公会信息页"), GUILD_WELFARE("公会福利页"),
     REWARD("奖励弹层"), BYGONE_FLOOR("旧日潜入页"), BYGONE_WARP("旧日跃迁中"),
     BYGONE_SCENE("旧日副本场景"), BYGONE_CONFIRM("旧日退出确认"),
 }
@@ -20,7 +20,9 @@ enum class NavigationAction {
 object NavigationPolicy {
     /** Destination pages have their own task-level content checks. Do not spend a second full scan on them. */
     fun requiredFrames(state: PageState, action: NavigationAction): Int = when {
-        state in setOf(PageState.HUD, PageState.MENU, PageState.BYGONE_SCENE) -> 3
+        // HUD only needs two stable frames; three was dominated by screenshot delay.
+        state in setOf(PageState.HUD, PageState.MENU) -> 2
+        state == PageState.BYGONE_SCENE -> 3
         action == NavigationAction.READY -> 1
         else -> 2
     }
@@ -46,7 +48,7 @@ object NavigationPolicy {
             NavigationGoal.KITCHEN -> state in setOf(PageState.HUB, PageState.KITCHEN)
             NavigationGoal.TRIALS -> state in setOf(PageState.HUB, PageState.TRIALS, PageState.TRIALS_PROXY, PageState.TRIALS_RESULT)
             NavigationGoal.ISLAND -> state in setOf(PageState.HUB, PageState.ISLAND)
-            NavigationGoal.GUILD -> state in setOf(PageState.GUILD, PageState.GUILD_DAILY, PageState.GUILD_INFO)
+            NavigationGoal.GUILD -> state in setOf(PageState.GUILD, PageState.GUILD_DAILY, PageState.GUILD_INFO, PageState.GUILD_WELFARE)
             NavigationGoal.GUILD_DAILY -> state == PageState.GUILD_DAILY
         }
         if (ready) return NavigationAction.READY
@@ -62,7 +64,7 @@ object NavigationPolicy {
                 else -> NavigationAction.CLOSE_MENU
             }
             PageState.SOCIAL -> if (goal == NavigationGoal.MAIL) NavigationAction.OPEN_MAIL else NavigationAction.BACK
-            PageState.GUILD, PageState.GUILD_INFO -> if (goal == NavigationGoal.GUILD_DAILY)
+            PageState.GUILD, PageState.GUILD_INFO, PageState.GUILD_WELFARE -> if (goal == NavigationGoal.GUILD_DAILY)
                 NavigationAction.SELECT_GUILD_DAILY else NavigationAction.BACK
             PageState.TRIALS -> NavigationAction.BACK
             PageState.TRIALS_PROXY -> NavigationAction.WAIT // Never dismiss or execute an unowned battle confirmation.

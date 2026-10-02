@@ -9,6 +9,34 @@ object PageStateDetector {
     fun inspect(screen: Bitmap, template: (String) -> Bitmap?, hud: HudTemplates?, focus: NavigationGoal? = null): PageObservation {
         fun observed(state: PageState, vararg controls: Pair<String, MatchResult?>) =
             PageObservation(state, controls.mapNotNull { (key, hit) -> hit?.let { key to it } }.toMap())
+        fun expandedMenu(): PageObservation? {
+            val social = MailScreenDetector.findSocialMenu(screen, template("menu_social_entry"))
+            val guild = GuildScreenDetector.findMenuGuild(screen, template("guild_menu_entry"))
+            if (social != null && guild != null)
+                return observed(PageState.MENU, "social" to social, "guild" to guild)
+            val settings = AccountTransitionScreenDetector.findSettingsMenu(screen, template("menu_settings_entry"))
+            return if (listOfNotNull(social, guild, settings).size >= 2)
+                observed(PageState.MENU, "social" to social, "guild" to guild, "settings" to settings)
+            else null
+        }
+        fun selectedGuildPage(): PageObservation? {
+            if (GuildScreenDetector.isInfoTabSelected(screen)) {
+                val daily = GuildScreenDetector.findDailyTab(screen, template("guild_daily_tab"))
+                val row = GuildScreenDetector.findRewardsRow(screen, template("guild_rewards_row"))
+                if (daily != null && row != null) return observed(PageState.GUILD_INFO, "daily" to daily)
+            }
+            if (GuildScreenDetector.isDailyTabSelected(screen)) {
+                val info = GuildScreenDetector.findInfoTab(screen, template("guild_info_tab"))
+                val donation = GuildScreenDetector.findDonateNow(screen, template("guild_donate_now"))
+                    ?: GuildScreenDetector.findDonateZero(screen, template("guild_donate_zero"), template("guild_donate_one"))
+                if (info != null && donation != null) return observed(PageState.GUILD_DAILY)
+                if (info != null && (GuildScreenDetector.findWeeklyClaimed(screen, template("guild_weekly_claimed")) != null ||
+                        GuildScreenDetector.findWeeklyOpen(screen, template("guild_weekly_open")) != null)) {
+                    return observed(PageState.GUILD_WELFARE, "daily" to GuildScreenDetector.findDonationTab(screen, template("guild_donation_tab")))
+                }
+            }
+            return null
+        }
         // Inside a confirmed mail flow, only inspect its own controls and result layer.
         if (focus == NavigationGoal.MAIL) {
             if (MailScreenDetector.findRewardPopup(screen, template("mail_reward_popup")) != null)
@@ -17,6 +45,21 @@ object PageStateDetector {
             val claim = MailScreenDetector.findClaimAll(screen, template("mail_claim_all"))
             return if (selected != null && claim != null) observed(PageState.MAIL, "claim" to claim)
             else observed(PageState.UNKNOWN)
+        }
+        // A fixed Social title plus its mail controls identifies this family
+        // without spending the navigation budget on unrelated battle templates.
+        if (MailScreenDetector.findSocialPageTitle(screen, template("social_page_title")) != null) {
+            if (MailScreenDetector.findRewardPopup(screen, template("mail_reward_popup")) != null)
+                return observed(PageState.REWARD)
+            val selected = MailScreenDetector.findMailSelected(screen, template("social_mail_selected"))
+            val claim = MailScreenDetector.findClaimAll(screen, template("mail_claim_all"))
+            if (selected != null && claim != null) return observed(PageState.MAIL, "claim" to claim)
+            val mail = MailScreenDetector.findMailTab(screen, template("social_mail_tab"))
+            if (mail != null) return observed(PageState.SOCIAL, "mail" to mail)
+        }
+        if (GuildScreenDetector.findPageTitle(screen, template("guild_page_title")) != null &&
+            !CheckInScreenDetector.isRewardPopup(screen) && !GameScreenDetector.hasConfirmationPanel(screen)) {
+            selectedGuildPage()?.let { return it }
         }
         // A pale bottom strip is a candidate only. Confirm content/title and distinguish the hub.
         if (!CheckInScreenDetector.isRewardPopup(screen) &&
@@ -34,7 +77,9 @@ object PageStateDetector {
         // inspectHud already excludes instance timers, warp, exit modals and login panels.
         // Avoid scanning unrelated trial/mail templates before each of the three HUD frames.
         val detection = GameScreenDetector.inspectHud(screen, hud)
-        if (detection.accepted) return observed(PageState.HUD, "menu" to detection.menu)
+        // The expanded menu leaves the HUD anchor visible underneath. Its destination
+        // controls must win over that anchor, while rejected dungeon frames stay below.
+        if (detection.accepted) return expandedMenu() ?: observed(PageState.HUD, "menu" to detection.menu)
         // Modal content precedes the scene that can remain visible behind it.
         val confirm = BygoneScreenDetector.findExitConfirm(screen, template("bygone_exit_confirm"))
         if (confirm != null && BygoneScreenDetector.findExitDialog(screen, template("bygone_exit_dialog")) != null)
@@ -49,6 +94,14 @@ object PageStateDetector {
         val popup = MailScreenDetector.findRewardPopup(screen, template("mail_reward_popup"))
         if (popup != null && CheckInScreenDetector.isRewardPopup(screen))
             return observed(PageState.REWARD)
+        if (!CheckInScreenDetector.isRewardPopup(screen) && !GameScreenDetector.hasConfirmationPanel(screen)) {
+            selectedGuildPage()?.let { return it }
+        }
+        val selected = MailScreenDetector.findMailSelected(screen, template("social_mail_selected"))
+        val claim = MailScreenDetector.findClaimAll(screen, template("mail_claim_all"))
+        if (selected != null && claim != null) return observed(PageState.MAIL, "claim" to claim)
+        val mail = MailScreenDetector.findMailTab(screen, template("social_mail_tab"))
+        if (mail != null) return observed(PageState.SOCIAL, "mail" to mail)
         val trial = TrialsScreenDetector.findDialogLogo(screen, template("trials_dialog_logo"))
         if (trial != null) {
             val trialControls = arrayOf(
@@ -63,31 +116,17 @@ object PageStateDetector {
             if (proxy != null) return observed(PageState.TRIALS_PROXY, "proxy" to proxy, *trialControls)
             return observed(PageState.TRIALS, *trialControls)
         }
-        val selected = MailScreenDetector.findMailSelected(screen, template("social_mail_selected"))
-        val claim = MailScreenDetector.findClaimAll(screen, template("mail_claim_all"))
-        if (selected != null && claim != null) return observed(PageState.MAIL, "claim" to claim)
-        val mail = MailScreenDetector.findMailTab(screen, template("social_mail_tab"))
-        if (mail != null) return observed(PageState.SOCIAL, "mail" to mail)
         val taste = KitchenScreenDetector.findTaste(screen, template("btn_eat"))?.takeIf { it.score >= 0.70f }
         if (taste != null) return observed(PageState.KITCHEN, "taste" to taste)
         if (IslandMerchantScreenDetector.findIslandPage(screen, template("island_page_title")) != null)
             return observed(PageState.ISLAND)
         val daily = GuildScreenDetector.findDailyTab(screen, template("guild_daily_tab"))
         val info = GuildScreenDetector.findInfoTab(screen, template("guild_info_tab"))
-        val donation = GuildScreenDetector.findDonateNow(screen, template("guild_donate_now"))
-            ?: GuildScreenDetector.findDonateZero(screen, template("guild_donate_zero"), template("guild_donate_one"))
-        if (daily != null && donation != null) return observed(PageState.GUILD_DAILY, "daily" to daily)
-        val row = GuildScreenDetector.findRewardsRow(screen, template("guild_rewards_row"))
-        if (info != null && row != null) return observed(PageState.GUILD_INFO, "daily" to daily)
         if (daily != null && info != null) return observed(PageState.GUILD, "daily" to daily)
         if (RequiredHubScreenDetector.hasMultipleTabs(screen, template)) return observed(PageState.HUB)
         val dive = BygoneScreenDetector.findDiveNext(screen, template("bygone_dive_next"))?.takeIf { it.score >= 0.70f }
         if (dive != null) return observed(PageState.BYGONE_FLOOR, "dive" to dive)
-        val social = MailScreenDetector.findSocialMenu(screen, template("menu_social_entry"))
-        val guild = GuildScreenDetector.findMenuGuild(screen, template("guild_menu_entry"))
-        val settings = AccountTransitionScreenDetector.findSettingsMenu(screen, template("menu_settings_entry"))
-        if (listOfNotNull(social, guild, settings).size >= 2)
-            return observed(PageState.MENU, "social" to social, "guild" to guild, "settings" to settings)
+        expandedMenu()?.let { return it }
         val userCenter = AccountTransitionScreenDetector.findUserCenter(screen, template("settings_user_center"))
         if (userCenter != null) return observed(PageState.SETTINGS, "userCenter" to userCenter)
         return observed(PageState.UNKNOWN)

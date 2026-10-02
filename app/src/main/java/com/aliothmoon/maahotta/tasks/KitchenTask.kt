@@ -4,14 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.Point
 import com.aliothmoon.maahotta.engine.BotContext
 import com.aliothmoon.maahotta.engine.GameTask
+import com.aliothmoon.maahotta.engine.Layout
 import com.aliothmoon.maahotta.engine.RelPoint
 import com.aliothmoon.maahotta.engine.TaskResult
 import com.aliothmoon.maahotta.vision.KitchenScreenDetector
 import com.aliothmoon.maahotta.vision.MatchResult
 import com.aliothmoon.maahotta.vision.PageState
-import com.aliothmoon.maahotta.vision.PageStateDetector
 import com.aliothmoon.maahotta.vision.ScreenTextFinder
-import com.aliothmoon.maahotta.vision.ScreenTextMatch
 import com.aliothmoon.maahotta.vision.SearchRegion
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -23,8 +22,7 @@ class KitchenTask : GameTask {
 
     private val rewardPopupOutside = RelPoint(0.50f, 0.10f)
 
-    // Each meal is a separate submission. An unconfirmed meal is never repeated.
-    // Completion is determined only by the mark on the Must-do card.
+    // Taste → dismiss reward if any → top-left exit → hub check. Completion is only the Must-do card mark.
     private val maxTasteTaps = 3
     private val maxNavigationFailures = 3
 
@@ -39,92 +37,82 @@ class KitchenTask : GameTask {
             ?: return TaskResult(title, false, "奖励弹窗模板未载入", retryable = false)
 
         var taps = 0
-        if (TaskNavigationMachine.observe(ctx).state == com.aliothmoon.maahotta.vision.PageState.KITCHEN) {
-            val taste = waitForTaste(ctx, tasteTemplate, 2_000)
-                ?: return stopWithScreenshot(ctx, "私厨页未确认品尝按钮")
-            ctx.log("状态：私厨页，直接继续品尝")
-            ctx.markActionSubmitted("$id:taste_1")
-            ctx.device.tap(taste.x, taste.y)
-            taps++
-            if (!waitForTasteResult(ctx, tasteTemplate, rewardPopupTemplate, completedTemplate, 12_000)) {
-                return stopWithScreenshot(ctx, "品尝后未确认奖励或私厨完成标记，不重复品尝")
-            }
-            ctx.confirmActionResult()
-            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 1_500) || !RequiredHubNavigator.returnToHub(ctx)) {
-                return stopWithScreenshot(ctx, "品尝后未能确认返回必做页")
-            }
-        }
         var navigationFailures = 0
+        var alreadyInKitchen = TaskNavigationMachine.observe(ctx).state == PageState.KITCHEN
+
         while (taps < maxTasteTaps) {
-            // The tasting reward can appear after the first return-to-hub check.
-            // Clear it before trying to recognize the hub tabs again.
-            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 500)) {
-                return stopWithScreenshot(ctx, "私厨奖励弹窗无法关闭")
+            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 400)) {
+                return stopWithScreenshot(ctx, "奖励弹窗无法关闭")
             }
-            if (!RequiredHubNavigator.selectRecommendByText(ctx)) {
-                navigationFailures++
-                if (navigationFailures >= maxNavigationFailures) {
-                    return stopWithScreenshot(ctx, "多次未能确认必做页左上角标题和左侧推荐")
+            if (!alreadyInKitchen) {
+                if (!RequiredHubNavigator.selectRecommendByText(ctx)) {
+                    navigationFailures++
+                    if (navigationFailures >= maxNavigationFailures) {
+                        return stopWithScreenshot(ctx, "多次未能确认必做页左上角标题和左侧推荐")
+                    }
+                    ctx.log("暂未确认必做和推荐，重新截图进入")
+                    continue
                 }
-                ctx.log("暂未确认必做和推荐，重新截图进入")
-                continue
-            }
 
-            if (waitForCompleted(ctx, completedTemplate, 1_200)) {
-                return completed(taps)
-            }
-
-            val entry = waitForEntry(ctx, entryTemplate, 3_000)
-            if (entry == null) {
-                navigationFailures++
-                if (navigationFailures >= maxNavigationFailures) {
-                    return stopWithScreenshot(ctx, "推荐页右上角多次未识别到 MIA 私厨入口")
+                if (waitForCompleted(ctx, completedTemplate, 1_500)) {
+                    return completed(taps)
                 }
-                ctx.log("右上角暂未识别到 MIA 私厨入口，重新确认推荐页")
-                continue
-            }
 
-            // The same card remains visible after completion. Never open it
-            // unless the completion mark is still absent.
-            if (waitForCompleted(ctx, completedTemplate, 700)) {
-                return completed(taps)
-            }
-
-            val taste = openKitchen(ctx, entry, entryTemplate, tasteTemplate)
-            if (taste == null) {
-                val returned = RequiredHubNavigator.returnToHub(ctx)
-                if (!returned) return stopWithScreenshot(ctx, "进入私厨后未识别到品尝，也未能返回必做页")
-                if (waitForCompleted(ctx, completedTemplate, 1_200)) return completed(taps)
-                navigationFailures++
-                if (navigationFailures >= maxNavigationFailures) {
-                    return stopWithScreenshot(ctx, "多次点击私厨入口后，右下角仍未识别到品尝")
+                val entry = waitForEntry(ctx, entryTemplate, 3_000)
+                if (entry == null) {
+                    navigationFailures++
+                    if (navigationFailures >= maxNavigationFailures) {
+                        return stopWithScreenshot(ctx, "推荐页右上角多次未识别到 MIA 私厨入口")
+                    }
+                    ctx.log("右上角暂未识别到 MIA 私厨入口，重新确认推荐页")
+                    continue
                 }
-                ctx.log("私厨按钮暂未出现，返回必做页重新识别入口")
-                continue
+
+                if (waitForCompleted(ctx, completedTemplate, 700)) {
+                    return completed(taps)
+                }
+
+                val taste = openKitchen(ctx, entry, entryTemplate, tasteTemplate)
+                if (taste == null) {
+                    exitKitchenToHub(ctx, rewardPopupTemplate)
+                    if (waitForCompleted(ctx, completedTemplate, 1_200)) return completed(taps)
+                    navigationFailures++
+                    if (navigationFailures >= maxNavigationFailures) {
+                        return stopWithScreenshot(ctx, "多次点击私厨入口后，右下角仍未识别到品尝")
+                    }
+                    ctx.log("私厨按钮暂未出现，返回必做页重新识别入口")
+                    continue
+                }
+
+                navigationFailures = 0
+                taps++
+                ctx.log("右下角已识别品尝，点击识别位置（第 $taps 次点击）")
+                ctx.markActionSubmitted("$id:taste_$taps")
+                ctx.device.tap(taste.x, taste.y)
+            } else {
+                val taste = waitForTaste(ctx, tasteTemplate, 2_000)
+                    ?: return stopWithScreenshot(ctx, "私厨页未确认品尝按钮")
+                alreadyInKitchen = false
+                taps++
+                ctx.log("状态：私厨页，直接品尝（第 $taps 次点击）")
+                ctx.markActionSubmitted("$id:taste_$taps")
+                ctx.device.tap(taste.x, taste.y)
             }
 
-            navigationFailures = 0
-            taps++
-            ctx.log("右下角已识别品尝，点击识别位置（第 $taps 次点击）")
-            ctx.markActionSubmitted("$id:taste_$taps")
-            ctx.device.tap(taste.x, taste.y)
-            if (!waitForTasteResult(ctx, tasteTemplate, rewardPopupTemplate, completedTemplate, 12_000)) {
-                return stopWithScreenshot(ctx, "第 $taps 次品尝结果无法确认，不返回重放品尝")
+            // Taste → clear reward popup if present → top-left exit → hub checkmark.
+            ctx.log("品尝后先处理奖励弹窗，再点击左上角退出 Mi-a 私厨")
+            if (!exitKitchenToHub(ctx, rewardPopupTemplate)) {
+                return stopWithScreenshot(ctx, "品尝后未能退出私厨并回到必做页")
             }
             ctx.confirmActionResult()
-            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 700)) {
-                return stopWithScreenshot(ctx, "品尝后奖励弹窗无法关闭")
-            }
-            if (!RequiredHubNavigator.returnToHub(ctx)) {
-                return stopWithScreenshot(ctx, "品尝后未能返回必做页")
-            }
-            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 1_500)) {
+
+            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 800)) {
                 return stopWithScreenshot(ctx, "必做页奖励弹窗无法关闭")
             }
             if (waitForCompleted(ctx, completedTemplate, 3_000)) {
                 return completed(taps)
             }
-            ctx.log("MIA 私厨尚未打勾，继续进入私厨品尝")
+            ctx.log("必做页 MIA 私厨尚未打勾，再次进入品尝")
         }
         return stopWithScreenshot(ctx, "已确认 $taps 次品尝后必做页仍未打勾，不追加品尝")
     }
@@ -157,6 +145,51 @@ class KitchenTask : GameTask {
             }
         }
         return null
+    }
+
+    /**
+     * Clear any reward popup with a blank tap, then use top-left back until the Must-do hub is stable.
+     */
+    private suspend fun exitKitchenToHub(ctx: BotContext, rewardTemplate: Bitmap): Boolean {
+        repeat(6) { attempt ->
+            if (!dismissRewardPopup(ctx, rewardTemplate, if (attempt == 0) 700 else 300)) {
+                return false
+            }
+            if (RequiredHubNavigator.selectRecommendByText(ctx)) return true
+            ctx.log(
+                if (attempt == 0) "点击左上角返回退出私厨"
+                else "仍未回到必做页，再次点击左上角返回",
+            )
+            ctx.tap(Layout.back, 500)
+        }
+        if (!dismissRewardPopup(ctx, rewardTemplate, 500)) return false
+        return RequiredHubNavigator.selectRecommendByText(ctx) ||
+            RequiredHubNavigator.returnToHub(ctx)
+    }
+
+    private suspend fun dismissRewardPopup(
+        ctx: BotContext,
+        template: Bitmap,
+        firstWaitMs: Long,
+    ): Boolean {
+        if (ctx.waitUntil(firstWaitMs, 250) { screen ->
+                KitchenScreenDetector.findRewardPopup(screen, template)
+            } == null
+        ) {
+            return true
+        }
+        repeat(3) { attempt ->
+            ctx.log(
+                if (attempt == 0) "识别到奖励弹窗，点击上方空白处关闭"
+                else "奖励弹窗仍在，再次点击上方空白处",
+            )
+            ctx.tap(rewardPopupOutside, 450)
+            val remaining = ctx.waitUntil(700, 250) { screen ->
+                KitchenScreenDetector.findRewardPopup(screen, template)
+            }
+            if (remaining == null) return true
+        }
+        return false
     }
 
     /** OCR only the lower-right button; the count label above it is excluded. */
@@ -198,68 +231,6 @@ class KitchenTask : GameTask {
             }
         }
         return null
-    }
-
-    private suspend fun waitForTasteResult(
-        ctx: BotContext,
-        tasteTemplate: Bitmap,
-        rewardTemplate: Bitmap,
-        completedTemplate: Bitmap,
-        timeoutMs: Long,
-    ): Boolean {
-        val deadline = ctx.deadlineAfter(timeoutMs)
-        var confirmedFrames = 0
-        while (ctx.elapsedRealtime() < deadline) {
-            val screen = ctx.device.screenshot()
-            if (screen == null) {
-                confirmedFrames = 0
-                delay(100)
-                continue
-            }
-            val confirmed = try {
-                withTimeoutOrNull(minOf(8_000L, deadline - ctx.elapsedRealtime()).coerceAtLeast(1L)) {
-                    val tasteAbsent = findTasteOnScreen(screen, tasteTemplate) == null
-                    val rewardVisible = KitchenScreenDetector.findRewardPopup(screen, rewardTemplate) != null
-                    val hubCompleted = !rewardVisible && PageStateDetector.inspect(
-                        screen, ctx.templates::get, ctx.hudTemplates(),
-                    ).state == PageState.HUB &&
-                        KitchenScreenDetector.findCompleted(screen, completedTemplate) != null
-                    tasteAbsent && (rewardVisible || hubCompleted)
-                }
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                null
-            } finally {
-                screen.recycle()
-            }
-            if (confirmed == true) {
-                confirmedFrames++
-                if (confirmedFrames >= 2) return true
-            } else {
-                confirmedFrames = 0
-            }
-            delay(350)
-        }
-        return false
-    }
-
-    private suspend fun dismissRewardPopup(
-        ctx: BotContext,
-        template: Bitmap,
-        firstWaitMs: Long,
-    ): Boolean {
-        if (ctx.waitUntil(firstWaitMs, 250) { screen ->
-            KitchenScreenDetector.findRewardPopup(screen, template)
-        } == null) return true
-        repeat(3) { attempt ->
-            ctx.log(if (attempt == 0) "识别到奖励弹窗，点击上方空白处关闭" else "奖励弹窗仍在，再次点击上方空白处")
-            ctx.tap(rewardPopupOutside, 450)
-            val remaining = ctx.waitUntil(700, 250) { screen ->
-                KitchenScreenDetector.findRewardPopup(screen, template)
-            }
-            if (remaining == null) return true
-        }
-        return false
     }
 
     private suspend fun waitForEntry(ctx: BotContext, template: Bitmap, timeoutMs: Long): MatchResult? =

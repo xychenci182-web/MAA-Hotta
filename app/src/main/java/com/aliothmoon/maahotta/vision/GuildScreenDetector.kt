@@ -26,11 +26,33 @@ object GuildScreenDetector {
     fun findMenuGuild(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, menuGuildRegion, 0.54f)
 
+    fun findPageTitle(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, SearchRegion(0.08f, 0.01f, 0.23f, 0.10f), 0.80f)
+
     fun findDailyTab(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, dailyTabRegion, 0.55f)
 
     fun findDonateNow(screen: Bitmap, template: Bitmap?): MatchResult? =
-        bestMatch(screen, template, donateNowRegion, 0.57f)
+        if (isDailyTabSelected(screen)) bestMatch(screen, template, donateNowRegion, 0.57f) else null
+
+    fun isDailyTabSelected(screen: Bitmap): Boolean = selectedTab(screen, 0.53f, 0.65f)
+
+    fun isInfoTabSelected(screen: Bitmap): Boolean = selectedTab(screen, 0.063f, 0.178f)
+
+    /** The selected footer tab has a dark panel; unselected tabs have a pale panel. */
+    private fun selectedTab(screen: Bitmap, left: Float, right: Float): Boolean {
+        var dark = 0
+        var count = 0
+        val step = (screen.height / 360).coerceAtLeast(1)
+        for (y in (screen.height * 0.923f).toInt() until (screen.height * 0.965f).toInt() step step) {
+            for (x in (screen.width * left).toInt() until (screen.width * right).toInt() step step) {
+                val colour = screen.getPixel(x, y)
+                if (maxOf(Color.red(colour), Color.green(colour), Color.blue(colour)) < 100) dark++
+                count++
+            }
+        }
+        return count > 0 && dark.toFloat() / count > 0.30f
+    }
 
     /**
      * Distinguish the completed 0/1 state from the available 1/1 state.
@@ -46,6 +68,7 @@ object GuildScreenDetector {
         zeroTemplate: Bitmap?,
         oneTemplate: Bitmap?,
     ): MatchResult? {
+        if (!isDailyTabSelected(screen)) return null
         val zero = bestMatch(screen, zeroTemplate, donateZeroRegion, 0.48f)
         val one = bestMatch(screen, oneTemplate, donateZeroRegion, 0.48f)
         val row = listOfNotNull(zero, one).maxByOrNull { it.score } ?: return null
@@ -73,6 +96,12 @@ object GuildScreenDetector {
 
     fun findWeeklyOpen(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, weeklyOpenRegion, 0.55f)
+
+    fun findWeeklyClaimed(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, weeklyOpenRegion, 0.78f)
+
+    fun findDonationTab(screen: Bitmap, template: Bitmap?): MatchResult? =
+        bestMatch(screen, template, SearchRegion(0.03f, 0.10f, 0.19f, 0.24f), 0.78f)
 
     fun findWeeklyRewardPopup(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, weeklyRewardPopupRegion, 0.54f)
@@ -156,7 +185,7 @@ object GuildScreenDetector {
         threshold: Float,
     ): MatchResult? {
         if (template == null) return null
-        val scales = floatArrayOf(0.78f, 0.90f, 1f, 1.12f, 1.26f)
+        val scales = floatArrayOf(1f, 0.90f, 1.12f, 0.78f, 1.26f)
         var best: MatchResult? = null
         for (scale in scales) {
             val candidate = if (scale == 1f) {
@@ -179,6 +208,7 @@ object GuildScreenDetector {
                     referenceHeight = 596,
                 )
                 if (match != null && match.score > (best?.score ?: -1f)) best = match
+                if (match != null && match.score >= maxOf(threshold, 0.92f)) return match
             } finally {
                 if (candidate !== template) candidate.recycle()
             }

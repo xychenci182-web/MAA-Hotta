@@ -24,7 +24,7 @@ object AccountTransitionScreenDetector {
         threshold: Float,
     ): MatchResult? {
         if (template == null) return null
-        val scales = floatArrayOf(0.78f, 0.90f, 1f, 1.12f, 1.26f)
+        val scales = floatArrayOf(1f, 0.90f, 1.12f, 0.78f, 1.26f)
         var best: MatchResult? = null
         for (scale in scales) {
             val candidate = if (scale == 1f) {
@@ -47,6 +47,7 @@ object AccountTransitionScreenDetector {
                     referenceHeight = 596,
                 )
                 if (match != null && match.score > (best?.score ?: -1f)) best = match
+                if (match != null && match.score >= maxOf(threshold, 0.92f)) return match
             } finally {
                 if (candidate !== template) candidate.recycle()
             }
