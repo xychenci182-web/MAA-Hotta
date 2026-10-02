@@ -30,6 +30,19 @@ class IslandMerchantTask(
         val merchantPortrait = ctx.templates.get("island_merchant_portrait")
             ?: return TaskResult(title, false, "人工岛老头头像模板未载入", retryable = false)
 
+        if (TaskNavigationMachine.observe(ctx).state == com.aliothmoon.maahotta.vision.PageState.ISLAND) {
+            val portrait = ctx.waitUntil(2_000, 350) { screen ->
+                IslandMerchantScreenDetector.findMerchantPortrait(screen, merchantPortrait)
+            }
+            if (portrait != null) {
+                ctx.log("状态：人工岛页，直接确认老头头像；人工岛老头检查结果：有")
+                onDetected(true)
+                return TaskResult(title, true, "账号 $accountId：有老头，等待记录角色名称")
+            }
+            // Missing portrait on an island page is not proof of absence. Recheck the hub card.
+            if (!RequiredHubNavigator.returnToHub(ctx)) return TaskResult(title, false,
+                "人工岛页未识别到头像，也无法返回必做页复核", retryable = false)
+        }
         var lastFailure = "未进入休闲页"
         for (attempt in 1..3) {
             ctx.log("人工岛老头第 $attempt 次检查")
@@ -86,7 +99,7 @@ class IslandMerchantTask(
             }
             ctx.log("人工岛页面右侧识别到老头头像，score=${"%.2f".format(portrait.score)}")
             ctx.log("人工岛老头检查结果：有（已识别到老头头像）")
-            if (!RequiredHubNavigator.returnToHub(ctx)) {
+            if (!ctx.preserveTaskPage && !RequiredHubNavigator.returnToHub(ctx)) {
                 return TaskResult(title, false, "已检查人工岛，但未能返回必做页", retryable = false)
             }
             onDetected(true)

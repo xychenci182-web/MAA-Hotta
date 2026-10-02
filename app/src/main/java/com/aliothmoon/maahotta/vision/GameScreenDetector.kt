@@ -7,7 +7,7 @@ import kotlin.math.roundToInt
 
 enum class GameScreen { HUD, MENU, SETTINGS, OTHER }
 
-data class HudTemplates(val menu: Bitmap, val minimap: Bitmap? = null, val exitDialog: Bitmap? = null, val exitConfirm: Bitmap? = null, val dodge: Bitmap? = null, val dungeonExit: Bitmap? = null)
+data class HudTemplates(val menu: Bitmap, val minimap: Bitmap? = null, val exitDialog: Bitmap? = null, val exitConfirm: Bitmap? = null, val dodge: Bitmap? = null, val dungeonExit: Bitmap? = null, val dungeonTimer: Bitmap? = null, val dungeonWarp: Bitmap? = null)
 
 data class HudDetection(
     val menu: MatchResult? = null,
@@ -35,6 +35,8 @@ object GameScreenDetector {
         val menuScore = best?.score ?: 0f
         val features = if (best != null && menuScore >= 0.78f) mapOf("menu" to best) else emptyMap()
         val reason = when {
+            BygoneScreenDetector.findSceneTimer(screen, templates.dungeonTimer) != null -> "检测到副本计时器，拒绝主界面判定"
+            BygoneScreenDetector.findWarpStart(screen, templates.dungeonWarp) != null -> "检测到旧日跃迁，拒绝主界面判定"
             WelfareNavigationDetector.hasBottomNavigation(screen) -> "检测到福利底栏，拒绝主界面判定"
             hasConfirmationPanel(screen) -> "检测到确认弹窗，拒绝主界面判定"
             BygoneScreenDetector.findExitDialog(screen, templates.exitDialog) != null &&
@@ -95,7 +97,7 @@ object GameScreenDetector {
         return menu.copy(point = Point(x, menu.point.y))
     }
 
-    private fun hasConfirmationPanel(screen: Bitmap): Boolean {
+    fun hasConfirmationPanel(screen: Bitmap): Boolean {
         fun ratio(l: Float, t: Float, r: Float, b: Float, test: (Int, Int, Int) -> Boolean): Float {
             var count = 0; var hits = 0
             val step = (screen.height / 180).coerceAtLeast(1)
@@ -115,6 +117,9 @@ object GameScreenDetector {
     }
 
     fun classify(screen: Bitmap, menuTemplate: HudTemplates?): GameScreen {
+        // A rejected dungeon HUD must not fall through to the expanded-menu heuristic either.
+        if (BygoneScreenDetector.findSceneTimer(screen, menuTemplate?.dungeonTimer) != null ||
+            BygoneScreenDetector.findWarpStart(screen, menuTemplate?.dungeonWarp) != null) return GameScreen.OTHER
         if (inspectHud(screen, menuTemplate).accepted) return GameScreen.HUD
         val width = screen.width
         val height = screen.height

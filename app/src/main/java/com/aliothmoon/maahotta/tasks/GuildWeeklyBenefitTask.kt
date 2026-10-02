@@ -232,6 +232,7 @@ class GuildWeeklyBenefitTask(
     }
 
     private suspend fun finish(ctx: BotContext, detail: String): TaskResult {
+        if (ctx.preserveTaskPage) return TaskResult(title, true, "$detail；保留公会福利页，由下一任务选择路径")
         if (keepGuildOpenForRewards) {
             return TaskResult(title, true, "$detail；继续领取公会荣耀奖励")
         }

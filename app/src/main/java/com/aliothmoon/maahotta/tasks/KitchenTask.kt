@@ -37,6 +37,17 @@ class KitchenTask : GameTask {
             ?: return TaskResult(title, false, "奖励弹窗模板未载入", retryable = false)
 
         var taps = 0
+        if (TaskNavigationMachine.observe(ctx).state == com.aliothmoon.maahotta.vision.PageState.KITCHEN) {
+            val taste = waitForTaste(ctx, tasteTemplate, 2_000)
+                ?: return stopWithScreenshot(ctx, "私厨页未确认品尝按钮")
+            ctx.log("状态：私厨页，直接继续品尝")
+            ctx.device.tap(taste.x, taste.y)
+            taps++
+            waitForTasteToDisappear(ctx, tasteTemplate, 3_000)
+            if (!dismissRewardPopup(ctx, rewardPopupTemplate, 1_500) || !RequiredHubNavigator.returnToHub(ctx)) {
+                return stopWithScreenshot(ctx, "品尝后未能确认返回必做页")
+            }
+        }
         var navigationFailures = 0
         while (taps < maxTasteTaps) {
             // The tasting reward can appear after the first return-to-hub check.

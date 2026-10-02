@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 
 internal object GuildNavigation {
     suspend fun openDaily(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.GUILD_DAILY)
+        if (ctx.dismissLineSwitch()) delay(500)
         val hudMenu = ctx.hudTemplates() ?: return false
         val guildEntry = ctx.templates.get("guild_menu_entry") ?: return false
         val dailyTab = ctx.templates.get("guild_daily_tab") ?: return false
@@ -86,8 +88,15 @@ internal object GuildNavigation {
     }
 
     suspend fun exitToGameHud(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.GAME)
         if (ctx.hasEnteredGame()) return true
         repeat(3) {
+            if (ctx.dismissLineSwitch()) {
+                delay(500)
+                if (ctx.hasEnteredGame()) return true
+                return@repeat
+            }
+            if (ctx.hasEnteredGame()) return true
             ctx.log("点击左上角公会返回")
             ctx.tap(Layout.back, 0)
             if (waitForGameHud(ctx, 5_000)) return true
@@ -105,8 +114,15 @@ internal object GuildNavigation {
     }
 
     private suspend fun ensureGameHud(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.GAME)
         if (ctx.hasEnteredGame()) return true
         repeat(4) {
+            if (ctx.dismissLineSwitch()) {
+                delay(500)
+                if (ctx.hasEnteredGame()) return true
+                return@repeat
+            }
+            if (ctx.hasEnteredGame()) return true
             ctx.tap(Layout.back, 0)
             if (waitForGameHud(ctx, 3_000)) return true
         }

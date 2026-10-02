@@ -85,6 +85,7 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
     }
 
     private suspend fun finish(ctx: BotContext, detail: String): TaskResult {
+        if (ctx.preserveTaskPage) return TaskResult(title, true, "$detail；保留公会日常页，由下一任务选择路径")
         if (keepGuildOpenForRewards) {
             return TaskResult(title, true, "$detail；继续处理公会奖励子任务")
         }

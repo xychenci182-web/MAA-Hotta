@@ -30,6 +30,30 @@ class BygonePhantasmTask : GameTask {
         val confirmTemplate = ctx.templates.get("bygone_exit_confirm")
             ?: return TaskResult(title, false, "退出确定按钮模板未载入")
 
+        // Resume from the actual dungeon state, never open the Must-do hub over it.
+        val current = TaskNavigationMachine.observe(ctx)
+        if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_CONFIRM) {
+            return exitScene(ctx, null, exitDialogTemplate, confirmTemplate,
+                sceneTimerTemplate, diveNextTemplate, skipTemplate)
+        }
+        if (current.state in setOf(com.aliothmoon.maahotta.vision.PageState.BYGONE_SCENE,
+                com.aliothmoon.maahotta.vision.PageState.BYGONE_WARP)) {
+            val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
+                warpStartTemplate, sceneTimerTemplate, 45_000)
+                ?: return stopAfterDive(ctx, "未能确认旧日副本场景")
+            return exitScene(ctx, exit, exitDialogTemplate, confirmTemplate,
+                sceneTimerTemplate, diveNextTemplate, skipTemplate)
+        }
+        if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_FLOOR) {
+            val dive = waitForDiveNext(ctx, diveNextTemplate, 2_000)
+                ?: return stopAfterDive(ctx, "旧日潜入页未确认潜入按钮")
+            ctx.device.tap(dive.point.x, dive.point.y)
+            val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
+                warpStartTemplate, sceneTimerTemplate, 45_000)
+                ?: return stopAfterDive(ctx, "潜入后未能确认旧日副本场景")
+            return exitScene(ctx, exit, exitDialogTemplate, confirmTemplate,
+                sceneTimerTemplate, diveNextTemplate, skipTemplate)
+        }
         var lastFailure = "未进入旧日幻想"
         for (attempt in 1..3) {
             ctx.log("旧日幻想第 $attempt 次尝试")
@@ -80,57 +104,67 @@ class BygonePhantasmTask : GameTask {
                 sceneTimerTemplate = sceneTimerTemplate,
                 timeoutMs = 45_000,
             ) ?: return stopAfterDive(ctx, "潜入后按钮未消失或跳过动画未完成")
-            ctx.log("退出点击第 1/3 次：按固定坐标点击退出 (${firstExit.point.x}, ${firstExit.point.y})")
-            ctx.device.tap(firstExit.point.x, firstExit.point.y)
-
-            var confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
-            for (exitAttempt in 2..3) {
-                if (confirm != null) break
-                var dialogVisible = false
-                val retryTarget = ctx.waitUntil(3_000, 350) { screen ->
-                    dialogVisible = BygoneScreenDetector.findExitDialog(screen, exitDialogTemplate) != null
-                    if (dialogVisible) BygoneScreenDetector.findExitConfirm(screen, confirmTemplate)
-                    else if (BygoneScreenDetector.findSceneTimer(screen, sceneTimerTemplate) != null &&
-                        BygoneScreenDetector.findDiveNext(screen, diveNextTemplate) == null &&
-                        BygoneScreenDetector.findSkip(screen, skipTemplate) == null
-                    ) MatchResult(Point(0, 0), 1f) else null
-                }
-                if (retryTarget == null) {
-                    ctx.log("第 $exitAttempt/3 次：无法确认旧日场景或弹窗按钮，本次不点击")
-                    continue
-                }
-                if (dialogVisible) {
-                    confirm = retryTarget
-                    break
-                }
-                ctx.log("仍在旧日幻想且未出现退出确认弹窗，按固定坐标再次点击退出（第 $exitAttempt/3 次）")
-                val point = fixedExitPoint(ctx)
-                ctx.device.tap(point.x, point.y)
-                confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
-            }
-            val confirmButton = confirm
-                ?: return stopAfterDive(ctx, "退出流程已尝试3轮，仍未识别到退出确认弹窗和确定按钮")
-            var returnedToGame = false
-            repeat(3) { confirmAttempt ->
-                if (!returnedToGame) {
-                    val currentConfirm = if (confirmAttempt == 0) confirmButton else
-                        waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 1_500)
-                    if (currentConfirm != null) {
-                        ctx.log(if (confirmAttempt == 0) "识别到退出确认弹窗，点击确定"
-                            else "尚未识别到主界面菜单，确认退出弹窗仍在，再次点击确定")
-                        ctx.device.tap(currentConfirm.point.x, currentConfirm.point.y)
-                    } else {
-                        ctx.log("未识别到退出确认弹窗，继续等待主界面菜单")
-                    }
-                    returnedToGame = waitForGameHud(ctx, 20_000)
-                }
-            }
-            if (!returnedToGame) {
-                return stopAfterDive(ctx, "点击确定后未识别到主界面菜单")
-            }
-            return TaskResult(title, true, "已潜入并退出到游戏主界面")
+            return exitScene(ctx, firstExit, exitDialogTemplate, confirmTemplate,
+                sceneTimerTemplate, diveNextTemplate, skipTemplate)
         }
         return TaskResult(title, false, "$lastFailure；已重试3次")
+    }
+
+    private suspend fun exitScene(
+        ctx: BotContext, firstExit: MatchResult?, exitDialogTemplate: Bitmap, confirmTemplate: Bitmap,
+        sceneTimerTemplate: Bitmap, diveNextTemplate: Bitmap, skipTemplate: Bitmap,
+    ): TaskResult {
+        if (firstExit != null) {
+            ctx.log("退出点击第 1/3 次：已确认副本，按固定坐标退出 (${firstExit.point.x}, ${firstExit.point.y})")
+            ctx.device.tap(firstExit.point.x, firstExit.point.y)
+        }
+
+        var confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
+        for (exitAttempt in 2..3) {
+            if (confirm != null) break
+            var dialogVisible = false
+            val retryTarget = ctx.waitUntil(3_000, 350) { screen ->
+                dialogVisible = BygoneScreenDetector.findExitDialog(screen, exitDialogTemplate) != null
+                if (dialogVisible) BygoneScreenDetector.findExitConfirm(screen, confirmTemplate)
+                else if (BygoneScreenDetector.findSceneTimer(screen, sceneTimerTemplate) != null &&
+                    BygoneScreenDetector.findDiveNext(screen, diveNextTemplate) == null &&
+                    BygoneScreenDetector.findSkip(screen, skipTemplate) == null
+                ) MatchResult(Point(0, 0), 1f) else null
+            }
+            if (retryTarget == null) {
+                ctx.log("第 $exitAttempt/3 次：无法确认旧日场景或弹窗按钮，本次不点击")
+                continue
+            }
+            if (dialogVisible) {
+                confirm = retryTarget
+                break
+            }
+            ctx.log("仍在旧日幻想且未出现退出确认弹窗，按固定坐标再次点击退出（第 $exitAttempt/3 次）")
+            val point = fixedExitPoint(ctx)
+            ctx.device.tap(point.x, point.y)
+            confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
+        }
+        val confirmButton = confirm
+            ?: return stopAfterDive(ctx, "退出流程已尝试3轮，仍未识别到退出确认弹窗和确定按钮")
+        var returnedToGame = false
+        repeat(3) { confirmAttempt ->
+            if (!returnedToGame) {
+                val currentConfirm = if (confirmAttempt == 0) confirmButton else
+                    waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 1_500)
+                if (currentConfirm != null) {
+                    ctx.log(if (confirmAttempt == 0) "识别到退出确认弹窗，点击确定"
+                        else "尚未识别到主界面菜单，确认退出弹窗仍在，再次点击确定")
+                    ctx.device.tap(currentConfirm.point.x, currentConfirm.point.y)
+                } else {
+                    ctx.log("未识别到退出确认弹窗，继续等待主界面菜单")
+                }
+                returnedToGame = waitForGameHud(ctx, 20_000)
+            }
+        }
+        if (!returnedToGame) {
+            return stopAfterDive(ctx, "点击确定后未识别到主界面菜单")
+        }
+        return TaskResult(title, true, "已潜入并退出到游戏主界面")
     }
 
     private suspend fun stopAfterDive(ctx: BotContext, detail: String): TaskResult {

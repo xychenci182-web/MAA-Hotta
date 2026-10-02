@@ -30,9 +30,14 @@ class CheckInTask(
     override suspend fun run(ctx: BotContext): TaskResult {
         val hudMenu = ctx.hudTemplates()
             ?: return TaskResult(title, false, "主界面菜单模板未载入")
-        val alreadyOnPage = ctx.waitUntil(700, 250) { screen ->
+        var alreadyOnPage = ctx.waitUntil(700, 250) { screen ->
             if (CheckInScreenDetector.isSignInPage(screen)) center(screen) else null
         } != null
+        if (!alreadyOnPage && ctx.preserveTaskPage) {
+            // Navigation already confirmed a welfare page. Select its tab without reopening the gift.
+            alreadyOnPage = openSignInAfterGift(ctx, hudMenu)
+            if (!alreadyOnPage) return failUnknown(ctx, "福利页内未能确认签到页")
+        }
         if (!alreadyOnPage) {
             var entered = false
             var lastFailure = "未进入福利签到页"
@@ -282,6 +287,10 @@ class CheckInTask(
     }
 
     private suspend fun finish(ctx: BotContext, checked: Boolean, detail: String): TaskResult {
+        if (ctx.preserveTaskPage) {
+            ctx.log("任务完成，保留福利页，由下一任务按状态导航")
+            return TaskResult(title, checked, detail)
+        }
         if (keepWelfareOpenForSupply) {
             val specialActionVisible = ctx.waitUntil(1_500, 350) { screen ->
                 if (WelfareNavigationDetector.hasSpecialActionTab(screen)) center(screen) else null
@@ -305,6 +314,7 @@ class CheckInTask(
     }
 
     private suspend fun returnToGame(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (isGameHud(ctx)) return true
         ctx.log("点击左上角返回游戏主界面")
         tapFromLeft(ctx, 45f, 27f)

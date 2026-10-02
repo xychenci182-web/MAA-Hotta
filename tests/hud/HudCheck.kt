@@ -7,7 +7,7 @@ import java.io.File
 import kotlin.math.abs
 fun main() {
  fun load(p:String)=Bitmap(ImageIO.read(File(p)))
- val template=HudTemplates(load("app/src/main/assets/templates/hud_menu_body.png"),load("app/src/main/assets/templates/hud_minimap_controls.png"),load("app/src/main/assets/templates/bygone_exit_dialog.png"),load("app/src/main/assets/templates/bygone_exit_confirm.png"),load("app/src/main/assets/templates/hud_dodge.png"),load("app/src/main/assets/templates/bygone_exit_icon.png"))
+ val template=HudTemplates(load("app/src/main/assets/templates/hud_menu_body.png"),load("app/src/main/assets/templates/hud_minimap_controls.png"),load("app/src/main/assets/templates/bygone_exit_dialog.png"),load("app/src/main/assets/templates/bygone_exit_confirm.png"),load("app/src/main/assets/templates/hud_dodge.png"),load("app/src/main/assets/templates/bygone_exit_icon.png"),load("app/src/main/assets/templates/bygone_scene_timer.png"),load("app/src/main/assets/templates/bygone_warp_start.png"))
  val password = load("tests/hud/fixtures/password-submit.png")
  for (height in listOf(360, 720, 1080)) {
  val frame = Bitmap.createScaledBitmap(password, password.width * height / password.height, height, true)

@@ -16,6 +16,7 @@ import com.aliothmoon.maahotta.vision.GameScreenDetector
 import com.aliothmoon.maahotta.vision.MatchResult
 import com.aliothmoon.maahotta.vision.ScreenTextFinder
 import com.aliothmoon.maahotta.vision.RewardRecoveryDetector
+import com.aliothmoon.maahotta.tasks.TaskNavigationMachine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -27,10 +28,36 @@ import java.io.File
 import kotlin.math.abs
 
 class BotContext(
-    val device: DeviceController,
+    device: DeviceController,
     val templates: TemplateStore,
     val log: (String) -> Unit,
 ) {
+    /** Set by the engine: successful tasks leave their verified page for the next state transition. */
+    var preserveTaskPage: Boolean = false
+    private val rawDevice = device
+    // All task screenshots pass through the highest-priority popup handler.
+    val device: DeviceController = object : DeviceController by rawDevice {
+        override suspend fun screenshot(): Bitmap? {
+            var handled = false
+            repeat(10) {
+                val shot = rawDevice.screenshot() ?: return null
+                val visible = try {
+                    dismissLineSwitch(shot)
+                } catch (error: Throwable) {
+                    shot.recycle()
+                    throw error
+                }
+                if (!visible) {
+                    if (handled) log("已确认线路选择弹窗关闭，恢复任务")
+                    return shot
+                }
+                shot.recycle()
+                handled = true
+                delay(500)
+            }
+            throw IllegalStateException("线路选择弹窗未关闭，停止后续页面点击")
+        }
+    }
     private var lastHudDetail = "尚未执行菜单识别"
     private var hudTemplatesAvailable = false
     private var hudScreenshotAvailable = false
@@ -132,7 +159,7 @@ class BotContext(
                         log("游戏画面：截图 ${shotWidth}×${shotHeight}，触控 ${size.x}×${size.y}，DPI $dpi")
                         loggedLandscapeCapture = true
                     }
-                    if (dismissLineSwitch(shot)) null else runCatching { predicate(shot) }.getOrNull()
+                    runCatching { predicate(shot) }.getOrNull()
                 } finally {
                     shot.recycle()
                 }
@@ -178,11 +205,14 @@ class BotContext(
 
     private var lineSwitchCancelCount = 0
     private var lastLineSwitchCancelAt = 0L
+    private var lineSwitchHandledGeneration = 0L
 
     /** 线路切换：只点取消，避免误触后阻塞日常任务。 */
     suspend fun dismissLineSwitch(): Boolean {
-        val shot = device.screenshot() ?: return false
-        return try { dismissLineSwitch(shot) } finally { shot.recycle() }
+        val previous = lineSwitchHandledGeneration
+        val shot = device.screenshot()
+        shot?.recycle()
+        return previous != lineSwitchHandledGeneration
     }
 
     private suspend fun dismissLineSwitch(shot: Bitmap): Boolean {
@@ -190,22 +220,32 @@ class BotContext(
         val cancel = templates.get("line_switch_cancel") ?: return false
         val heading = TemplateMatcher.match(shot, title, threshold = 0.80f,
             region = SearchRegion(0.12f, 0.16f, 0.50f, 0.38f), referenceHeight = 561)
-        if (heading == null) {
+        val titleConfirmed = heading != null || (GameScreenDetector.hasConfirmationPanel(shot) &&
+            withTimeoutOrNull(2_000) {
+                ScreenTextFinder.findAllInRegion(shot, listOf("线路选择"),
+                    SearchRegion(0.12f, 0.16f, 0.55f, 0.39f)).isNotEmpty()
+            } == true)
+        if (!titleConfirmed) {
             lineSwitchCancelCount = 0
             return false
         }
         val button = TemplateMatcher.match(shot, cancel, threshold = 0.78f,
             region = SearchRegion(0.20f, 0.54f, 0.53f, 0.79f), referenceHeight = 561)
-            ?: return true
+        // The title has been verified; Cancel stays left of Confirm in this dialog.
+        val cancelPoint = button?.point ?: Point(
+            (shot.width / 2f - shot.height * 0.18f).toInt(),
+            (shot.height * 0.665f).toInt(),
+        )
         if (elapsedRealtime() - lastLineSwitchCancelAt < 1_000 && lineSwitchCancelCount > 0) return true
         check(lineSwitchCancelCount < 3) { "线路切换弹窗取消3次仍未关闭" }
         val size = device.screenSize()
         if (size.x <= 0 || size.y <= 0) return true
         lineSwitchCancelCount++
+        lineSwitchHandledGeneration++
         lastLineSwitchCancelAt = elapsedRealtime()
         log("识别到线路切换，点击取消（第 $lineSwitchCancelCount/3 次）")
-        device.tap((button.point.x.toDouble() * size.x / shot.width).toInt(),
-            (button.point.y.toDouble() * size.y / shot.height).toInt())
+        device.tap((cancelPoint.x.toDouble() * size.x / shot.width).toInt(),
+            (cancelPoint.y.toDouble() * size.y / shot.height).toInt())
         return true
     }
 
@@ -465,6 +505,8 @@ class BotContext(
             templates.get("bygone_exit_confirm"),
             null,
             templates.get("bygone_exit_icon"),
+            templates.get("bygone_scene_timer"),
+            templates.get("bygone_warp_start"),
         )
     }
 
@@ -573,6 +615,7 @@ class ScreenshotUnavailableException : IllegalStateException(
 interface GameTask {
     val id: String
     val title: String
+    fun shouldNavigate(): Boolean = true
     suspend fun run(ctx: BotContext): TaskResult
 }
 
@@ -581,6 +624,7 @@ class TaskEngine(
     private val relogin: (suspend () -> TaskResult)? = null,
 ) {
     suspend fun runAll(tasks: List<GameTask>): List<TaskResult> {
+        context.preserveTaskPage = true
         val out = mutableListOf<TaskResult>()
         for (task in tasks) {
             var result = TaskResult(task.title, false, "尚未执行")
@@ -593,8 +637,13 @@ class TaskEngine(
                 )
                 result = runCatching {
                     // Login launches the game itself; no game window may exist yet.
-                    if (task.id != "login") context.recoverPopups()
-                    task.run(context)
+                    val goal = if (task.shouldNavigate()) TaskNavigationMachine.goalFor(task.id) else null
+                    if (goal != null && !TaskNavigationMachine.reach(context, goal)) {
+                        context.saveTaskDiagnostic(task.id)
+                        // No task action has started. Allow the existing disconnect/relogin recovery,
+                        // or one bounded navigation retry, before stopping the chain.
+                        TaskResult(task.title, false, "当前页面无法确认或无法到达任务页面，状态导航已停止")
+                    } else task.run(context)
                 }
                     .getOrElse {
                         if (it is CancellationException) throw it

@@ -3,13 +3,18 @@ package com.aliothmoon.maahotta.tasks
 import com.aliothmoon.maahotta.engine.BotContext
 import com.aliothmoon.maahotta.engine.Layout
 import com.aliothmoon.maahotta.vision.GameScreen
+import com.aliothmoon.maahotta.vision.NavigationGoal
 import kotlinx.coroutines.delay
 
 /** Page-aware recovery shared by tasks that require the normal character HUD. */
 internal object GameHudNavigator {
-    suspend fun isHudOrMenu(ctx: BotContext): Boolean = ensurePlainHud(ctx)
+    suspend fun isHudOrMenu(ctx: BotContext): Boolean = when (ctx.gameScreen()) {
+        GameScreen.HUD, GameScreen.MENU -> true
+        else -> false
+    }
 
     suspend fun ensurePlainHud(ctx: BotContext, timeoutMs: Long = 3_500): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, NavigationGoal.HUD, timeoutMs + 4_000)
         when (ctx.gameScreen()) {
             GameScreen.HUD -> return true
             GameScreen.MENU -> Unit

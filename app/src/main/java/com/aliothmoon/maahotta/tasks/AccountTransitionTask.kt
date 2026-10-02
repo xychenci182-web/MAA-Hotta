@@ -144,6 +144,7 @@ class AccountTransitionTask(
     }
 
     private suspend fun ensureGameHud(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (GameHudNavigator.ensurePlainHud(ctx)) return true
         repeat(5) {
             ctx.tap(Layout.back, 650)

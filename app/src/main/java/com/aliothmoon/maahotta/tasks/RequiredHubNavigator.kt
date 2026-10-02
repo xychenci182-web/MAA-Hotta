@@ -128,6 +128,7 @@ internal object RequiredHubNavigator {
     }
 
     suspend fun returnToHub(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUB)
         val templates = loadTemplates(ctx) ?: return false
         if (waitForHub(ctx, templates, 600)) return true
         repeat(3) {
@@ -139,6 +140,7 @@ internal object RequiredHubNavigator {
     }
 
     private suspend fun ensureOpen(ctx: BotContext, templates: HubTemplates): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUB)
         if (waitForHub(ctx, templates, 700)) {
             ctx.log("当前已在必做页，继续使用左侧页签")
             return true
@@ -206,6 +208,7 @@ internal object RequiredHubNavigator {
     }
 
     private suspend fun returnToGame(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (GameHudNavigator.ensurePlainHud(ctx, 1_500)) return true
         repeat(4) {
             ctx.log("点击左上角返回游戏主界面")

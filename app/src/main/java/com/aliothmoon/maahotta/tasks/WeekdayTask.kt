@@ -12,6 +12,7 @@ class WeekdayTask(
 ) : GameTask {
     override val id: String = delegate.id
     override val title: String = delegate.title
+    override fun shouldNavigate(): Boolean = LocalDate.now().dayOfWeek.value in weekdays
 
     override suspend fun run(ctx: BotContext): TaskResult {
         val today = LocalDate.now().dayOfWeek.value

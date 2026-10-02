@@ -89,6 +89,7 @@ class GuildRewardTask : GameTask {
             return stopUncertain(ctx, "领取后仍有 ${currentDots.count { it }} 个奖励红点")
         }
 
+        if (ctx.preserveTaskPage) return TaskResult(title, true, "已领取 $claimed 个奖励；保留公会信息页")
         val exited = GuildNavigation.exitToGameHud(ctx)
         return TaskResult(
             title,

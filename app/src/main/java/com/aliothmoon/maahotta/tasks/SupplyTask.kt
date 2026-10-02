@@ -205,6 +205,10 @@ class SupplyTask : GameTask {
     }
 
     private suspend fun finish(ctx: BotContext, claimed: Boolean, detail: String): TaskResult {
+        if (ctx.preserveTaskPage) {
+            ctx.log("任务完成，保留福利页，由下一任务按状态导航")
+            return TaskResult(title, claimed, detail)
+        }
         if (isGameHud(ctx)) {
             ctx.log("已在游戏主界面，不再点击左上角返回")
             return TaskResult(title, claimed, detail)
@@ -227,6 +231,7 @@ class SupplyTask : GameTask {
     }
 
     private suspend fun returnToGame(ctx: BotContext): Boolean {
+        if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (isGameHud(ctx)) return true
         ctx.log("点击左上角返回游戏主界面")
         tapFromLeft(ctx, 45f, 27f)
