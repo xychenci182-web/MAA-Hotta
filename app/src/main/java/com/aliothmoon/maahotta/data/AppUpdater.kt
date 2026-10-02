@@ -24,8 +24,8 @@ object AppUpdater {
         val url = URL(address)
         require(url.protocol == "https" && url.host.isNotBlank() && url.userInfo == null) { "更新地址必须是 HTTPS 地址" }
         return (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 20_000
+            connectTimeout = 30_000
+            readTimeout = 300_000
             instanceFollowRedirects = false
         }
     }

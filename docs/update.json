@@ -1,7 +1,7 @@
 {
+    "apkUrl":  "https://ghproxy.net/https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.5/mah.apk",
+    "sha256":  "da94511c4883dae331762e6080349b1e1405796c7db7aeda4b40d7868e2a5019",
     "versionCode":  7,
     "versionName":  "0.2.5",
-    "apkUrl":  "https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.5/mah.apk",
-    "sha256":  "da94511c4883dae331762e6080349b1e1405796c7db7aeda4b40d7868e2a5019",
-    "notes":  "Navigation policy and task flow updates"
+    "notes":  "Navigation policy and task flow updates (mirror download)"
 }
