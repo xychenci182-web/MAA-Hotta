@@ -6,6 +6,8 @@
 *.iml
 local.properties
 *.jks
+*.keystore
+keystore.properties
 captures/
 .externalNativeBuild
 .cxx/
