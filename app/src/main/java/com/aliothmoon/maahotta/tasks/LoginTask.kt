@@ -148,6 +148,8 @@ class LoginTask(
         val entry = withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(loginDeadline) {
                 awaitGameCapture(ctx)
+                ctx.log("已取得横屏游戏画面，固定等待20秒后开始识别")
+                delay(20_000)
                 waitForLoginEntry(ctx, forceSwitchWithoutVerification)
             }
         } ?: if (finalHudConfirmationAllowed && ctx.finishPendingHudConfirmation(loginDeadline)) {
