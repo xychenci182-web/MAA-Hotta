@@ -967,10 +967,11 @@ class LoginTask(
                 while (ctx.elapsedRealtime() < deadline) {
                     if (ctx.hasEnteredGame(requiredFrames = 3)) {
                         ctx.log("菜单连续确认，已进入游戏主界面")
+                        ctx.log("已进入游戏，开始识别奖励找回")
+                        ctx.dismissRewardRecoveryPopup(allowOcr = true)
                         return@withTimeoutOrNull TaskResult(title, true, "已进入游戏主界面")
                     }
                     if (ctx.dismissAnnouncement()) continue
-                    if (ctx.dismissRewardRecoveryPopup(allowOcr = true)) continue
                     if (ctx.enterFromTitle()) {
                         continue
                     }
