@@ -226,7 +226,7 @@ class LoginTask(
         }
     }
 
-    /** Password entry ends when the login button is clicked. Loading uses a new clock. */
+    /** Password entry ends when the login button is clicked. Loading starts after the login page is gone. */
     private suspend fun submitPassword(ctx: BotContext, passwordPage: PasswordPage): CredentialAttempt {
         if (!enterPassword(ctx, passwordPage)) {
             return CredentialAttempt.Done(TaskResult(title, false, "密码未能写入输入框"))
@@ -238,16 +238,26 @@ class LoginTask(
     }
 
     private suspend fun awaitGameLoadingAfterSubmit(ctx: BotContext): TaskResult {
-        ctx.log("登录已提交，游戏加载单独等待120秒")
+        // Confirm the click left the login page, but do not spend the loading window there.
+        ctx.log("登录已提交，确认是否离开登录页")
+        val exitDeadline = ctx.elapsedRealtime() + 10_000L
+        val leftLoginPage = withTimeoutOrNull(10_000L) {
+            ctx.withLoginCaptureDeadline(exitDeadline) {
+                waitForPasswordPageExit(ctx, exitDeadline)
+            }
+        } == true
+        if (!leftLoginPage) {
+            return if (ctx.finishPendingHudConfirmation(exitDeadline, allowAdditionalFrames = false)) {
+                TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
+            } else {
+                TaskResult.uncertain(title, "登录提交后10秒内未确认离开登录页，停止且不重复提交")
+            }
+        }
+        ctx.log("已离开登录页，游戏加载单独等待120秒")
         val loadingDeadline = ctx.elapsedRealtime() + 120_000L
         return withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(loadingDeadline) {
-                if (!waitForPasswordPageExit(ctx, loadingDeadline)) {
-                    TaskResult.uncertain(title, "登录提交后未在等待时间内确认离开密码页，停止且不重复提交")
-                } else {
-                    ctx.log("已确认离开密码页，继续验证进入游戏")
-                    waitEntered(ctx, loadingDeadline)
-                }
+                waitEntered(ctx, loadingDeadline)
             }
         } ?: if (ctx.finishPendingHudConfirmation(loadingDeadline, allowAdditionalFrames = false)) {
             TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
