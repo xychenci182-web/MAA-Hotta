@@ -13,7 +13,6 @@ import com.aliothmoon.maahotta.vision.GameScreen
 import com.aliothmoon.maahotta.vision.AccountScreenDetector
 import com.aliothmoon.maahotta.vision.AccountTransitionScreenDetector
 import com.aliothmoon.maahotta.vision.TitleScreenDetector
-import com.aliothmoon.maahotta.vision.SearchRegion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -239,7 +238,7 @@ class LoginTask(
 
     private suspend fun awaitGameLoadingAfterSubmit(ctx: BotContext): TaskResult {
         // Confirm the click left the login page, but do not spend the loading window there.
-        ctx.log("登录已提交，确认是否离开登录页")
+        ctx.log("登录已提交，按蓝色登录按钮确认是否离开密码页")
         val exitDeadline = ctx.elapsedRealtime() + 10_000L
         val leftLoginPage = withTimeoutOrNull(10_000L) {
             ctx.withLoginCaptureDeadline(exitDeadline) {
@@ -250,10 +249,10 @@ class LoginTask(
             return if (ctx.finishPendingHudConfirmation(exitDeadline, allowAdditionalFrames = false)) {
                 TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
             } else {
-                TaskResult.uncertain(title, "登录提交后10秒内未确认离开登录页，停止且不重复提交")
+                TaskResult.uncertain(title, "登录提交后10秒内仍能看到蓝色登录按钮，停止且不重复提交")
             }
         }
-        ctx.log("已离开登录页，游戏加载单独等待120秒")
+        ctx.log("蓝色登录按钮已消失，游戏加载单独等待120秒")
         val loadingDeadline = ctx.elapsedRealtime() + 120_000L
         return withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(loadingDeadline) {
@@ -266,7 +265,6 @@ class LoginTask(
 
     private suspend fun waitForPasswordPageExit(ctx: BotContext, deadline: Long): Boolean {
         var absentFrames = 0
-        val passwordTemplate = ctx.templates.get("pwd_password")
         while (ctx.elapsedRealtime() < deadline) {
             delay(500)
             val screen = ctx.device.screenshot()
@@ -275,16 +273,7 @@ class LoginTask(
                 continue
             }
             val passwordPageVisible = try {
-                val passwordFieldVisible = listOf("lib_password", "lib_pwd", "lib_login_password")
-                    .any { ctx.device.viewInfo(it) != null }
-                passwordFieldVisible || AccountScreenDetector.findPasswordSubmit(screen) != null ||
-                    (passwordTemplate != null && TemplateMatcher.match(
-                        screen,
-                        passwordTemplate,
-                        0.76f,
-                        region = SearchRegion(0.20f, 0.12f, 0.80f, 0.88f),
-                        referenceHeight = TemplateMatcher.LOGIN_REFERENCE_HEIGHT,
-                    ) != null)
+                AccountScreenDetector.findPasswordSubmit(screen) != null
             } finally {
                 screen.recycle()
             }
