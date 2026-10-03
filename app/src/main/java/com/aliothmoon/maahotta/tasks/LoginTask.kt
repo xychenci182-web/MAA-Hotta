@@ -50,16 +50,15 @@ class LoginTask(
         loginIdentity.invalidate()
         ctx.invalidateAccountIdentity()
         val login = if (verificationOnly) verifyExistingAccount(ctx) else runLogin(ctx)
-        // Reuse only this attempt's User Center proof; submitting credentials requires a fresh audit.
-        val result = if (!verificationOnly && login.ok && !loginIdentity.isVerifiedFor(account.id)) {
-            ctx.log("主界面已确认，开始核验当前账号")
-            verifyExistingAccount(ctx)
-        } else login
-        if (result.ok) {
+        // The HUD menu frames already confirm the main screen. Do not open User Center again.
+        if (login.ok) {
             ctx.confirmAccountIdentity(account.id)
-            ctx.log("账号身份与主界面均已确认，登录完成")
+            ctx.log(
+                if (loginIdentity.isVerifiedFor(account.id)) "账号与主界面均已确认，登录完成"
+                else "主界面菜单已确认，登录完成",
+            )
         }
-        return result
+        return login
     }
 
     /** Disabling automatic login still requires identity proof, but never switches or enters credentials. */
