@@ -371,7 +371,6 @@ class LoginTask(
                 }
                 continue
             }
-            if (ctx.dismissRewardRecoveryPopup()) continue
             if (!accountChecked && !accountFlowActive && accountOverlay(ctx) {
                     TitleScreenDetector.findUnobstructedEntry(it) != null
                 }) {
