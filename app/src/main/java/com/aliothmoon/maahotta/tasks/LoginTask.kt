@@ -12,6 +12,7 @@ import com.aliothmoon.maahotta.vision.TemplateMatcher
 import com.aliothmoon.maahotta.vision.GameScreen
 import com.aliothmoon.maahotta.vision.AccountScreenDetector
 import com.aliothmoon.maahotta.vision.AccountTransitionScreenDetector
+import com.aliothmoon.maahotta.vision.AnnouncementDetector
 import com.aliothmoon.maahotta.vision.TitleScreenDetector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
@@ -150,7 +151,11 @@ class LoginTask(
                 awaitGameCapture(ctx)
                 ctx.log("已取得横屏游戏画面，固定等待20秒后开始识别")
                 delay(20_000)
-                waitForLoginEntry(ctx, forceSwitchWithoutVerification)
+                if (launchGame && !confirmAnnouncementClosedBeforeLogin(ctx, loginDeadline)) {
+                    LoginEntry.Failure("固定等待后游戏公告仍未关闭，停止登录识别")
+                } else {
+                    waitForLoginEntry(ctx, forceSwitchWithoutVerification)
+                }
             }
         } ?: if (finalHudConfirmationAllowed && ctx.finishPendingHudConfirmation(loginDeadline)) {
             LoginEntry.GameEntered(loginIdentity.verifiedAccountId)
@@ -281,6 +286,31 @@ class LoginTask(
             }
             absentFrames = if (passwordPageVisible) 0 else absentFrames + 1
             if (absentFrames >= 2) return true
+        }
+        return false
+    }
+
+    /** First launch only: the login home can be covered by the announcement. */
+    private suspend fun confirmAnnouncementClosedBeforeLogin(ctx: BotContext, deadline: Long): Boolean {
+        ctx.log("首次登录，固定等待结束，先确认游戏公告已关闭")
+        while (ctx.elapsedRealtime() < deadline) {
+            currentCoroutineContext().ensureActive()
+            val screen = ctx.device.screenshot()
+            if (screen == null) {
+                delay(500)
+                continue
+            }
+            val open = try {
+                AnnouncementDetector.hasLayout(screen)
+            } finally {
+                screen.recycle()
+            }
+            if (!open) {
+                ctx.log("已确认游戏公告关闭，开始下一步识别")
+                return true
+            }
+            ctx.dismissAnnouncement()
+            delay(500)
         }
         return false
     }
