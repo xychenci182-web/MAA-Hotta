@@ -261,15 +261,15 @@ class LoginTask(
             }
         }
         ctx.log("蓝色登录按钮已消失，开始游戏加载")
-        ctx.log("游戏加载单独等待120秒")
-        val loadingDeadline = ctx.elapsedRealtime() + 120_000L
-        return withTimeoutOrNull(120_000L) {
+        ctx.log("游戏加载单独等待60秒")
+        val loadingDeadline = ctx.elapsedRealtime() + 60_000L
+        return withTimeoutOrNull(60_000L) {
             ctx.withLoginCaptureDeadline(loadingDeadline) {
                 waitEntered(ctx, loadingDeadline)
             }
         } ?: if (ctx.finishPendingHudConfirmation(loadingDeadline, allowAdditionalFrames = false)) {
             TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
-        } else TaskResult.uncertain(title, "登录提交后游戏加载等待120秒仍未确认完成，已停止")
+        } else TaskResult.uncertain(title, "登录提交后游戏加载等待60秒仍未确认完成，已停止")
     }
 
     private suspend fun waitForPasswordPageExit(ctx: BotContext, deadline: Long): Boolean {
@@ -965,13 +965,12 @@ class LoginTask(
         return ctx.withLoginCaptureDeadline(deadline) {
             withTimeoutOrNull((deadline - ctx.elapsedRealtime()).coerceAtLeast(1L)) {
                 while (ctx.elapsedRealtime() < deadline) {
+                    if (ctx.dismissAnnouncement()) continue
+                    if (ctx.dismissRewardRecoveryPopup(allowOcr = true)) continue
                     if (ctx.hasEnteredGame(requiredFrames = 3)) {
                         ctx.log("菜单连续确认，已进入游戏主界面")
-                        ctx.log("已进入游戏，开始识别奖励找回")
-                        ctx.dismissRewardRecoveryPopup(allowOcr = true)
                         return@withTimeoutOrNull TaskResult(title, true, "已进入游戏主界面")
                     }
-                    if (ctx.dismissAnnouncement()) continue
                     if (ctx.enterFromTitle()) {
                         continue
                     }
