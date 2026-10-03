@@ -374,9 +374,9 @@ class LoginTask(
             if (!accountChecked && !accountFlowActive && accountOverlay(ctx) {
                     TitleScreenDetector.findUnobstructedEntry(it) != null
                 }) {
-                if (settingsOpenAttempts++ >= 3) return LoginEntry.Failure("无法从游戏首页打开设置")
+                if (settingsOpenAttempts++ >= 3) return LoginEntry.Failure("无法从登录首页打开设置")
                 waitingForUserCenter = true
-                ctx.log("已确认无遮挡游戏首页，点击齿轮核对账号")
+                ctx.log("已确认无遮挡登录首页，点击齿轮核对账号")
                 tapTitleSettingsGear(ctx)
                 ctx.log("齿轮后识别用户中心按钮")
                 tapRecognizedUserCenter(ctx)
@@ -490,24 +490,24 @@ class LoginTask(
                     if (titleAccountRecoveryActive) {
                         if (titleEntryTapAttempts++ >= 5) {
                             if (titleAccountRecoveryAttempts >= 3) {
-                                return LoginEntry.Failure("切换账号后多次点击游戏首页仍未弹出账号页面")
+                                return LoginEntry.Failure("切换账号后多次点击登录首页仍未弹出账号页面")
                             }
-                            ctx.log("多次点击游戏首页仍未弹出账号页面，重新通过齿轮和用户中心触发切换账号")
+                            ctx.log("多次点击登录首页仍未弹出账号页面，重新通过齿轮和用户中心触发切换账号")
                             titleAccountRecoveryActive = false
                             titleEntryTapAttempts = 0
                             delay(400)
                             continue
                         }
-                        ctx.log("切换账号后账号页面尚未弹出，点击游戏首页等待账号页面出现")
+                        ctx.log("切换账号后账号页面尚未弹出，点击登录首页等待账号页面出现")
                         ctx.device.tap(titleEntry.point.x, titleEntry.point.y)
                         delay(900)
                         continue
                     }
 
                     if (titleAccountRecoveryAttempts++ >= 3) {
-                        return LoginEntry.Failure("切换账号后停留在游戏首页，无法重新打开账号页面")
+                        return LoginEntry.Failure("切换账号后停留在登录首页，无法重新打开账号页面")
                     }
-                    ctx.log("切换账号后只返回游戏首页且账号页面未弹出，点击右侧齿轮重新触发")
+                    ctx.log("切换账号后只返回登录首页且账号页面未弹出，点击右侧齿轮重新触发")
                     waitingForAccountList = false
                     waitingForUserCenter = true
                     titleAccountRecoveryActive = true
@@ -522,7 +522,7 @@ class LoginTask(
 
                 recentAccountWaitRounds++
                 if (recentAccountWaitRounds == 1 || recentAccountWaitRounds % 4 == 0) {
-                    ctx.log("切换账号后等待账号列表或游戏首页稳定")
+                    ctx.log("切换账号后等待账号列表或登录首页稳定")
                 }
                 delay(500)
                 continue
@@ -625,11 +625,11 @@ class LoginTask(
             if (titleEntry != null) {
                 if (!accountChecked) {
                     if (settingsOpenAttempts >= 3) {
-                        return LoginEntry.Failure("无法从游戏首页打开设置")
+                        return LoginEntry.Failure("无法从登录首页打开设置")
                     }
                     settingsOpenAttempts++
                     waitingForUserCenter = true
-                    ctx.log("识别到游戏首页，点击齿轮核对账号")
+                    ctx.log("识别到登录首页，点击齿轮核对账号")
                     tapTitleSettingsGear(ctx)
                     // The title gear opens settings. Go to User Center directly even if
                     // the generic settings classifier missed the transitional frame.

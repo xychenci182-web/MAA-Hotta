@@ -560,12 +560,12 @@ class BotContext(
     }
 
     suspend fun tapTitleEntry(point: Point) {
-        log("识别到游戏首页，点击进入")
+        log("识别到登录首页，点击进入")
         device.tap(point.x, point.y)
         val changed = waitUntil(3_000, 500) { shot ->
             if (TitleScreenDetector.findEntry(shot) == null) MatchResult(Point(0, 0), 1f) else null
         } != null
-        if (!changed) log("点击进入后仍是游戏首页，下一轮继续识别")
+        if (!changed) log("点击进入后仍是登录首页，下一轮继续识别")
     }
 
     fun hudTemplates(): com.aliothmoon.maahotta.vision.HudTemplates? {
