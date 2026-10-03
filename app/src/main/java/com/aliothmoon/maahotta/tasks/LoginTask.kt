@@ -867,13 +867,15 @@ class LoginTask(
 
     private suspend fun enterPhone(ctx: BotContext, page: PhonePage, phone: String): Boolean {
         val field = ctx.device.viewInfo("lib_account")
-        if (field?.text == phone) return true
+        if (samePhoneDigits(field?.text, phone)) {
+            ctx.log("手机号已在输入框中")
+            return true
+        }
+        // ACTION_SET_TEXT replaces the field. A formatted or unreadable value must not
+        // fall through to key events, or the same digits are appended a second time.
         if (field != null && ctx.device.setViewText("lib_account", phone)) {
-            delay(250)
-            if (ctx.device.viewInfo("lib_account")?.text == phone) {
-                ctx.log("已确认手机号填入")
-                return true
-            }
+            ctx.log("已写入手机号")
+            return true
         }
         if (field != null) {
             ctx.device.tap(field.bounds.centerX(), field.bounds.centerY())
@@ -884,11 +886,15 @@ class LoginTask(
         }
         delay(250)
         if (!ctx.device.inputText(phone)) return false
-        delay(250)
         val observed = ctx.device.viewInfo("lib_account")?.text
-        if (observed != null && observed != phone) return false
-        ctx.log(if (observed == phone) "已确认手机号填入" else "手机号已输入，无法读取当前控件值")
+        if (observed != null && !samePhoneDigits(observed, phone)) return false
+        ctx.log(if (samePhoneDigits(observed, phone)) "已确认手机号填入" else "已输入手机号")
         return true
+    }
+
+    private fun samePhoneDigits(shown: String?, phone: String): Boolean {
+        val digits = shown?.filter(Char::isDigit).orEmpty()
+        return digits.isNotEmpty() && digits == phone
     }
 
     private suspend fun clickNext(ctx: BotContext, page: PhonePage): Boolean {
