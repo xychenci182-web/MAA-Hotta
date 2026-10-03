@@ -142,6 +142,10 @@ class LoginTask(
         if (launchGame && !ctx.device.launchApp(Packages.OFFICIAL, forceStop = true)) {
             return TaskResult(title, false, "无法强制重启游戏，请检查 Shizuku 授权和游戏安装状态", retryable = false)
         }
+        if (launchGame) {
+            ctx.log("首次启动游戏，固定等待20秒后开始识别")
+            delay(20_000)
+        }
         // Capture readiness and login-screen recognition share one hard limit.
         // Return a normal failure so the existing diagnostic/report path runs.
         val loginDeadline = ctx.elapsedRealtime() + 120_000L
@@ -257,10 +261,6 @@ class LoginTask(
             }
         }
         ctx.log("蓝色登录按钮已消失，开始游戏加载")
-        if (launchGame) {
-            ctx.log("首次启动游戏，游戏加载固定等待20秒")
-            delay(20_000)
-        }
         ctx.log("游戏加载单独等待120秒")
         val loadingDeadline = ctx.elapsedRealtime() + 120_000L
         return withTimeoutOrNull(120_000L) {
