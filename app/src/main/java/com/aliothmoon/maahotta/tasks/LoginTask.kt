@@ -149,10 +149,8 @@ class LoginTask(
         val entry = withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(loginDeadline) {
                 awaitGameCapture(ctx)
-                ctx.log("已取得横屏游戏画面，固定等待20秒后开始识别")
-                delay(20_000)
                 if (launchGame && !confirmAnnouncementClosedBeforeLogin(ctx, loginDeadline)) {
-                    LoginEntry.Failure("固定等待后游戏公告仍未关闭，停止登录识别")
+                    LoginEntry.Failure("游戏公告仍未关闭，停止登录识别")
                 } else {
                     waitForLoginEntry(ctx, forceSwitchWithoutVerification)
                 }
@@ -259,7 +257,12 @@ class LoginTask(
                 TaskResult.uncertain(title, "登录提交后10秒内仍能看到蓝色登录按钮，停止且不重复提交")
             }
         }
-        ctx.log("蓝色登录按钮已消失，游戏加载单独等待120秒")
+        ctx.log("蓝色登录按钮已消失，开始游戏加载")
+        if (launchGame) {
+            ctx.log("首次启动游戏，游戏加载固定等待20秒")
+            delay(20_000)
+        }
+        ctx.log("游戏加载单独等待120秒")
         val loadingDeadline = ctx.elapsedRealtime() + 120_000L
         return withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(loadingDeadline) {
@@ -292,7 +295,7 @@ class LoginTask(
 
     /** First launch only: the login home can be covered by the announcement. */
     private suspend fun confirmAnnouncementClosedBeforeLogin(ctx: BotContext, deadline: Long): Boolean {
-        ctx.log("首次登录，固定等待结束，先确认游戏公告已关闭")
+        ctx.log("首次登录，先确认游戏公告已关闭")
         while (ctx.elapsedRealtime() < deadline) {
             currentCoroutineContext().ensureActive()
             val screen = ctx.device.screenshot()
