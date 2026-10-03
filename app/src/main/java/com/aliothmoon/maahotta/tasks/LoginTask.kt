@@ -35,6 +35,10 @@ class LoginTask(
 
     private data class PhonePage(val nextPoint: Point?)
     private data class PasswordPage(val fieldId: String?, val fieldPoint: Point?)
+    private sealed interface CredentialAttempt {
+        data class Done(val result: TaskResult) : CredentialAttempt
+        data object Submitted : CredentialAttempt
+    }
     private sealed interface LoginEntry {
         data class Phone(val page: PhonePage) : LoginEntry
         data class Password(val page: PasswordPage, val shownPhone: String?) : LoginEntry
@@ -165,56 +169,89 @@ class LoginTask(
         }
         loginIdentity.invalidate()
         ctx.resetHudDetection()
-        // Credential submission and its transitions share a fixed budget. Missing frames never replay input.
+        // Filling the phone and password has its own 120s budget and must not consume the loading window.
         val credentialDeadline = ctx.elapsedRealtime() + 120_000L
-        return withTimeoutOrNull(120_000L) {
+        val submitted = withTimeoutOrNull(120_000L) {
             ctx.withLoginCaptureDeadline(credentialDeadline) credentials@{
                 if (entry is LoginEntry.Password) {
                     if (!sameSavedPhone(entry.shownPhone)) {
-                        return@credentials TaskResult(title, false, "密码页账号与所选手机号不一致或无法核对")
+                        return@credentials CredentialAttempt.Done(
+                            TaskResult(title, false, "密码页账号与所选手机号不一致或无法核对"),
+                        )
                     }
                     ctx.log("密码页显示的账号与所选手机号一致")
-                    return@credentials completePasswordLogin(ctx, entry.page, credentialDeadline)
+                    return@credentials submitPassword(ctx, entry.page)
                 }
                 val phonePage = (entry as LoginEntry.Phone).page
                 val phone = account.username.trim().removePrefix("+86")
                 if (phone.isEmpty() || !phone.all { it in '0'..'9' }) {
-                    return@credentials TaskResult(title, false, "通行证账号须填写不含区号的手机号")
+                    return@credentials CredentialAttempt.Done(
+                        TaskResult(title, false, "通行证账号须填写不含区号的手机号"),
+                    )
                 }
                 if (account.password.isEmpty()) {
-                    return@credentials TaskResult(title, false, "未填写密码")
+                    return@credentials CredentialAttempt.Done(TaskResult(title, false, "未填写密码"))
                 }
                 if (!agreeToTerms(ctx, phonePage)) {
-                    return@credentials TaskResult(title, false, "无法确认用户协议已勾选")
+                    return@credentials CredentialAttempt.Done(
+                        TaskResult(title, false, "无法确认用户协议已勾选"),
+                    )
                 }
                 if (!enterPhone(ctx, phonePage, phone)) {
-                    return@credentials TaskResult(title, false, "手机号未能写入输入框")
+                    return@credentials CredentialAttempt.Done(
+                        TaskResult(title, false, "手机号未能写入输入框"),
+                    )
                 }
                 if (!clickNext(ctx, phonePage)) {
-                    return@credentials TaskResult(title, false, "找不到“下一步”按钮")
+                    return@credentials CredentialAttempt.Done(
+                        TaskResult(title, false, "找不到“下一步”按钮"),
+                    )
                 }
 
                 val passwordPage = waitForPasswordPage(ctx, credentialDeadline)
-                    ?: return@credentials TaskResult(title, false, "点击下一步后仍未进入密码页")
-                completePasswordLogin(ctx, passwordPage, credentialDeadline)
+                    ?: return@credentials CredentialAttempt.Done(
+                        TaskResult(title, false, "点击下一步后仍未进入密码页"),
+                    )
+                submitPassword(ctx, passwordPage)
             }
-        } ?: if (ctx.finishPendingHudConfirmation(credentialDeadline, allowAdditionalFrames = false)) {
-            TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
-        } else TaskResult.uncertain(title, "登录提交与游戏加载等待120秒仍未确认完成，已停止")
+        }
+        if (submitted == null) {
+            return if (ctx.finishPendingHudConfirmation(credentialDeadline, allowAdditionalFrames = false)) {
+                TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
+            } else TaskResult.uncertain(title, "填写账号密码等待120秒仍未提交登录，已停止")
+        }
+        return when (submitted) {
+            is CredentialAttempt.Done -> submitted.result
+            CredentialAttempt.Submitted -> awaitGameLoadingAfterSubmit(ctx)
+        }
     }
 
-    private suspend fun completePasswordLogin(ctx: BotContext, passwordPage: PasswordPage, deadline: Long): TaskResult {
+    /** Password entry ends when the login button is clicked. Loading uses a new clock. */
+    private suspend fun submitPassword(ctx: BotContext, passwordPage: PasswordPage): CredentialAttempt {
         if (!enterPassword(ctx, passwordPage)) {
-            return TaskResult(title, false, "密码未能写入输入框")
+            return CredentialAttempt.Done(TaskResult(title, false, "密码未能写入输入框"))
         }
         if (!clickLogin(ctx)) {
-            return TaskResult(title, false, "找不到密码页的登录按钮")
+            return CredentialAttempt.Done(TaskResult(title, false, "找不到密码页的登录按钮"))
         }
-        if (!waitForPasswordPageExit(ctx, deadline)) {
-            return TaskResult.uncertain(title, "登录提交后未在等待时间内确认离开密码页，停止且不重复提交")
-        }
-        ctx.log("已确认离开密码页，继续验证进入游戏")
-        return waitEntered(ctx)
+        return CredentialAttempt.Submitted
+    }
+
+    private suspend fun awaitGameLoadingAfterSubmit(ctx: BotContext): TaskResult {
+        ctx.log("登录已提交，游戏加载单独等待120秒")
+        val loadingDeadline = ctx.elapsedRealtime() + 120_000L
+        return withTimeoutOrNull(120_000L) {
+            ctx.withLoginCaptureDeadline(loadingDeadline) {
+                if (!waitForPasswordPageExit(ctx, loadingDeadline)) {
+                    TaskResult.uncertain(title, "登录提交后未在等待时间内确认离开密码页，停止且不重复提交")
+                } else {
+                    ctx.log("已确认离开密码页，继续验证进入游戏")
+                    waitEntered(ctx, loadingDeadline)
+                }
+            }
+        } ?: if (ctx.finishPendingHudConfirmation(loadingDeadline, allowAdditionalFrames = false)) {
+            TaskResult(title, true, "已确认进入游戏主界面，继续核验账号")
+        } else TaskResult.uncertain(title, "登录提交后游戏加载等待120秒仍未确认完成，已停止")
     }
 
     private suspend fun waitForPasswordPageExit(ctx: BotContext, deadline: Long): Boolean {
@@ -886,8 +923,7 @@ class LoginTask(
         return true
     }
 
-    private suspend fun waitEntered(ctx: BotContext): TaskResult {
-        val deadline = ctx.deadlineAfter(120_000)
+    private suspend fun waitEntered(ctx: BotContext, deadline: Long = ctx.deadlineAfter(120_000)): TaskResult {
         return ctx.withLoginCaptureDeadline(deadline) {
             withTimeoutOrNull((deadline - ctx.elapsedRealtime()).coerceAtLeast(1L)) {
                 while (ctx.elapsedRealtime() < deadline) {
