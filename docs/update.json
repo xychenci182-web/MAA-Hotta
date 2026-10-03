@@ -1,7 +1,7 @@
 {
-  "versionCode": 9,
-  "versionName": "0.2.7",
-  "apkUrl": "https://ghproxy.net/https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.7/mah.apk",
-  "sha256": "ef0ed80f3075440200ea8cb0abcc85c20bd194b21432649b867b7e4ed4b69f13",
-  "notes": "修复登录截图等待、签到与私厨流程；加速菜单、邮件和公会页面识别并延长加载等待；空邮箱无响应时继续；识别公会周奖励已领取状态。"
+  "versionCode": 10,
+  "versionName": "0.2.8",
+  "apkUrl": "https://ghproxy.net/https://github.com/xychenci182-web/MAA-Hotta/releases/download/v0.2.8/mah.apk",
+  "sha256": "c6d95b33238c45b76a42c3c7c3e4fe47cb717fdd8b86a7f3e215b529416bd8b1",
+  "notes": "登录提交后，游戏加载单独再等120秒，不与填写账号密码共用计时。本次更换签名，已安装旧版无法覆盖更新，需卸载后安装本版本。"
 }
