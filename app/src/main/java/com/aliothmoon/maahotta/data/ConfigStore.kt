@@ -112,7 +112,7 @@ class ConfigStore(private val context: Context) {
     }
 
     private companion object {
-        const val BUNDLED_ACCOUNTS_VERSION = 2
+        const val BUNDLED_ACCOUNTS_VERSION = 3
         const val BUNDLED_ACCOUNTS_FILE = "default_accounts.txt"
         val BUNDLED_ACCOUNT_PATTERN = Regex("^账号：(\\d{11})----([A-Za-z0-9]+)-+\\s*(.+)$")
     }

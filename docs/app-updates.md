@@ -4,8 +4,9 @@
 GitHub Pages 从 `main` 分支的 `/docs` 目录发布；`docs/update.json` 与
 `docs/updates/update.json` 必须来自同一份生成清单。
 
-公开 APK 不打包本机 `default_accounts.txt`。账号、密码和 Bark Device Key
-保存在设备本机；覆盖安装保留已有应用配置。首次安装需要自行添加账号和 Bark 地址。
+公开 APK 不打包本机 `default_accounts.txt`。该文件只进入本机 `local` 构建；
+debug 与 release 会排除它。`tools/prepare-update.ps1` 发现待发布包里仍有这个文件会直接中止。
+账号、密码和 Bark Device Key 保存在设备本机；覆盖安装保留已有应用配置。首次安装需要自行添加账号和 Bark 地址。
 
 发布顺序：
 

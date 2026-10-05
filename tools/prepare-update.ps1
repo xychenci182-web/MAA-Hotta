@@ -16,7 +16,18 @@ $build = $metadata.elements[0]
 $apk = Join-Path $sourceDirectory $build.outputFile
 $destination = if ([IO.Path]::IsPathFullyQualified($OutputDirectory)) { $OutputDirectory } else { Join-Path $projectRoot $OutputDirectory }
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-Copy-Item -LiteralPath $apk -Destination (Join-Path $destination 'mah.apk') -Force
+$publishedApk = Join-Path $destination 'mah.apk'
+Copy-Item -LiteralPath $apk -Destination $publishedApk -Force
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$publishedZip = [System.IO.Compression.ZipFile]::OpenRead($publishedApk)
+try {
+    $bundledAccounts = $publishedZip.Entries | Where-Object { ($_.FullName -replace '\\','/') -eq 'assets/default_accounts.txt' }
+    if ($bundledAccounts) {
+        throw "Refusing to publish $publishedApk because it contains assets/default_accounts.txt"
+    }
+} finally {
+    $publishedZip.Dispose()
+}
 $manifest = [ordered]@{
     versionCode = $build.versionCode
     versionName = $build.versionName

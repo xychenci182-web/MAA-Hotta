@@ -54,7 +54,7 @@
 
 1. Android Studio 打开本目录，JDK 17，同步后运行 `app`。
 2. 安装 APK 后：开启无障碍「MAA Hotta 手势服务」，并给 Shizuku 授权。
-3. 在「账号」页添加通行证，勾选要跑的号。
+3. 在「账号」页添加通行证，勾选要跑的号。本机预置账号写在 `app/src/main/assets/default_accounts.txt`（不提交），只随 `local` 构建导入；公开用的 debug 包不含这个文件。
 4. 在「任务」页选择日常项目。
 5. 把按钮小图放进工程目录 `app/src/main/assets/templates/`（文件名见该目录 README），然后重新 Generate APKs。关键模板缺失时任务会报错；少量已确认页面的兜底点击仍使用相对坐标。
 

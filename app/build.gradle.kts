@@ -48,6 +48,12 @@ android {
                 "proguard-rules.pro",
             )
         }
+        // Daily install on this machine. The public debug/release packages stay separate.
+        create("local") {
+            initWith(getByName("debug"))
+            isDefault = true
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {
@@ -66,8 +72,16 @@ android {
     }
 
     androidResources {
-        // Local bootstrap credentials are never included in distributable APKs.
-        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:default_accounts.txt"
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        // Only the local install may package bootstrap accounts. Debug is what gets published.
+        if (variant.buildType != "local") {
+            variant.androidResources.ignoreAssetsPatterns.add("default_accounts.txt")
+        }
     }
 }
 
