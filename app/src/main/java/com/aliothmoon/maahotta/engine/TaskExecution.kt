@@ -111,11 +111,11 @@ internal class TaskAttemptRunner(
                 }
                 if (disconnected) {
                     val recover = relogin
-                    if (recover == null || reconnects >= 2) {
+                    if (recover == null || reconnects >= 1 || attempt >= 2) {
                         return TaskResult(title, false, "掉线后无法继续重新登录", retryable = false)
                     }
                     reconnects++
-                    log("掉线已确认，重新登录本任务所属账号（$reconnects/2）")
+                    log("掉线已确认，重新登录本任务所属账号（$reconnects/1）")
                     wait(1_000)
                     val loginResult = try {
                         recover()
@@ -127,6 +127,7 @@ internal class TaskAttemptRunner(
                     if (!loginResult.ok) return TaskResult.uncertain(title, "掉线后重新登录失败：${loginResult.detail}")
                     if (result.ok) return result
                     log("身份重新确认，继续执行尚未提交的任务：$title")
+                    attempt++
                     continue
                 }
             }

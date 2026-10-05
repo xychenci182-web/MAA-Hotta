@@ -78,11 +78,18 @@ fun main() {
  }
  for(path in listOf("tests/hud/fixtures/confirmation.png","tests/hud/fixtures/supply.png")) {
  val frame=load(path)
- check(GameScreenDetector.findHudMenu(frame,template)==null) { "False HUD: $path" }
- check(GameScreenDetector.findGiftHudIcon(frame,template)==null)
- check(GameScreenDetector.findCrossedHudIcon(frame,template)==null)
- check(GameScreenDetector.classify(frame,template)!=GameScreen.HUD)
- println("PASS negative $path")
+ // These panels no longer veto a menu match; only the instance timer does.
+ val detection=GameScreenDetector.inspectHud(frame,template)
+ val menuOnly=GameScreenDetector.inspectHud(frame,template,excludeOtherScreens=false)
+ check(detection.accepted==menuOnly.accepted) { "Unexpected panel veto: $path" }
+ println("PASS timer-only exclusion $path")
+ val scoped=GameScreenDetector.inspectHud(frame,template,exclusions =
+     if(path.endsWith("supply.png")) com.aliothmoon.maahotta.vision.HudExclusions.WELFARE
+     else com.aliothmoon.maahotta.vision.HudExclusions.GUILD)
+ check(!scoped.accepted) { "Related panel was accepted: $path" }
+ check(scoped.reason.contains(if(path.endsWith("supply.png")) "福利底栏" else "确认弹窗"))
+ check(GameScreenDetector.inspectHud(frame,template,exclusions =
+     com.aliothmoon.maahotta.vision.HudExclusions.NONE).accepted==menuOnly.accepted)
  }
  val emulatorMain=load("tests/hud/fixtures/emulator-main.png")
  val userMain = GameScreenDetector.inspectHud(load("tests/hud/fixtures/user-main-window.png"), template)

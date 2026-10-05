@@ -7,6 +7,21 @@ import kotlin.math.roundToInt
 
 enum class GameScreen { HUD, MENU, SETTINGS, OTHER }
 
+/** Negative evidence is limited to the task or page being left. */
+enum class HudExclusions {
+    NONE, TIMER, DUNGEON, WELFARE, GUILD, LOGIN;
+
+    companion object {
+        fun forTask(taskId: String?): HudExclusions = when {
+            taskId in setOf("check_in", "supply") -> WELFARE
+            taskId == "bygone_phantasm" || taskId?.startsWith("trials_") == true -> DUNGEON
+            taskId?.startsWith("guild_") == true -> GUILD
+            taskId in setOf("login", "account_transition") -> LOGIN
+            else -> NONE
+        }
+    }
+}
+
 data class HudTemplates(val menu: Bitmap, val minimap: Bitmap? = null, val exitDialog: Bitmap? = null, val exitConfirm: Bitmap? = null, val dodge: Bitmap? = null, val dungeonExit: Bitmap? = null, val dungeonTimer: Bitmap? = null, val dungeonWarp: Bitmap? = null)
 
 data class HudDetection(
@@ -25,28 +40,39 @@ object GameScreenDetector {
     // Scale uniformly by height, just like ReferenceFrameController.
     private const val ICON_SPACING_AT_720 = 57f
 
-    fun findHudMenu(screen: Bitmap, templates: HudTemplates?): MatchResult? =
-        inspectHud(screen, templates).menu
+    fun findHudMenu(
+        screen: Bitmap,
+        templates: HudTemplates?,
+        excludeOtherScreens: Boolean = true,
+        exclusions: HudExclusions = HudExclusions.TIMER,
+    ): MatchResult? = inspectHud(screen, templates, excludeOtherScreens, exclusions).menu
 
-    fun inspectHud(screen: Bitmap, templates: HudTemplates?): HudDetection {
+    fun inspectHud(
+        screen: Bitmap,
+        templates: HudTemplates?,
+        excludeOtherScreens: Boolean = true,
+        exclusions: HudExclusions = HudExclusions.TIMER,
+    ): HudDetection {
         if (templates == null) return HudDetection(reason = "主界面验证模板未完整载入")
         if (screen.width <= screen.height) return HudDetection(reason = "游戏画面尚未横屏")
         val best = matchFeature(screen, templates.menu, searchRegions.getValue("menu"))
         val menuScore = best?.score ?: 0f
         val features = if (best != null && menuScore >= 0.78f) mapOf("menu" to best) else emptyMap()
-        val reason = when {
-            BygoneScreenDetector.findSceneTimer(screen, templates.dungeonTimer) != null -> "检测到副本计时器，拒绝主界面判定"
-            BygoneScreenDetector.findWarpStart(screen, templates.dungeonWarp) != null -> "检测到旧日跃迁，拒绝主界面判定"
-            WelfareNavigationDetector.hasBottomNavigation(screen) -> "检测到福利底栏，拒绝主界面判定"
-            hasConfirmationPanel(screen) -> "检测到确认弹窗，拒绝主界面判定"
-            BygoneScreenDetector.findExitDialog(screen, templates.exitDialog) != null &&
-                BygoneScreenDetector.findExitConfirm(screen, templates.exitConfirm) != null ->
-                "检测到旧日退出确认弹窗，拒绝主界面判定"
-            AccountScreenDetector.findPasswordSubmit(screen) != null -> "检测到登录面板，拒绝主界面判定"
-            templates.dungeonExit?.let { BygoneScreenDetector.findExitIcon(screen, it)?.score ?: 0f }?.let { it >= 0.62f } == true -> "检测到副本退出图标，拒绝主界面判定"
-            menuScore < 0.78f -> "菜单未达到0.78"
+        val excludedScreenReason = if (excludeOtherScreens) when {
+            exclusions in setOf(HudExclusions.TIMER, HudExclusions.DUNGEON) &&
+                BygoneScreenDetector.findSceneTimer(screen, templates.dungeonTimer) != null -> "检测到副本计时器，拒绝主界面判定"
+            exclusions == HudExclusions.DUNGEON && BygoneScreenDetector.findWarpStart(screen, templates.dungeonWarp) != null -> "检测到旧日跃迁，拒绝主界面判定"
+            exclusions == HudExclusions.DUNGEON && BygoneScreenDetector.findExitDialog(screen, templates.exitDialog) != null &&
+                BygoneScreenDetector.findExitConfirm(screen, templates.exitConfirm) != null -> "检测到旧日退出确认弹窗，拒绝主界面判定"
+            exclusions == HudExclusions.DUNGEON && (templates.dungeonExit?.let {
+                BygoneScreenDetector.findExitIcon(screen, it)?.score ?: 0f
+            } ?: 0f) >= 0.62f -> "检测到副本退出图标，拒绝主界面判定"
+            exclusions == HudExclusions.WELFARE && WelfareNavigationDetector.hasBottomNavigation(screen) -> "检测到福利底栏，拒绝主界面判定"
+            exclusions in setOf(HudExclusions.GUILD, HudExclusions.DUNGEON) && hasConfirmationPanel(screen) -> "检测到确认弹窗，拒绝主界面判定"
+            exclusions == HudExclusions.LOGIN && AccountScreenDetector.findPasswordSubmit(screen) != null -> "检测到登录面板，拒绝主界面判定"
             else -> null
-        }
+        } else null
+        val reason = excludedScreenReason ?: if (menuScore < 0.78f) "菜单未达到0.78" else null
         return HudDetection(
             menu = if (reason == null) features["menu"]?.copy(requiresStableFrames = true) else null,
             menuScore = menuScore,
@@ -94,7 +120,7 @@ object GameScreenDetector {
         findHudSlot(screen, menuTemplate, 4)
 
     private fun findHudSlot(screen: Bitmap, menuTemplate: HudTemplates?, slotsLeft: Int): MatchResult? {
-        val menu = findHudMenu(screen, menuTemplate) ?: return null
+        val menu = findHudMenu(screen, menuTemplate, exclusions = HudExclusions.NONE) ?: return null
         val x = (menu.point.x - slotsLeft * ICON_SPACING_AT_720 * screen.height / 720f).roundToInt()
         if (x !in 0 until screen.width || menu.point.y !in 0 until screen.height) return null
         // Score belongs to the menu anchor, not to the derived icon.
@@ -120,11 +146,16 @@ object GameScreenDetector {
         return neutral > 0.55f && blueButton > 0.10f
     }
 
-    fun classify(screen: Bitmap, menuTemplate: HudTemplates?): GameScreen {
+    fun classify(screen: Bitmap, menuTemplate: HudTemplates?, exclusions: HudExclusions = HudExclusions.TIMER): GameScreen {
         // A rejected dungeon HUD must not fall through to the expanded-menu heuristic either.
-        if (BygoneScreenDetector.findSceneTimer(screen, menuTemplate?.dungeonTimer) != null ||
+        if (exclusions in setOf(HudExclusions.TIMER, HudExclusions.DUNGEON) &&
+            BygoneScreenDetector.findSceneTimer(screen, menuTemplate?.dungeonTimer) != null) return GameScreen.OTHER
+        if (exclusions == HudExclusions.DUNGEON &&
             BygoneScreenDetector.findWarpStart(screen, menuTemplate?.dungeonWarp) != null) return GameScreen.OTHER
-        if (inspectHud(screen, menuTemplate).accepted) return GameScreen.HUD
+        val hud = inspectHud(screen, menuTemplate, exclusions = exclusions)
+        if (hud.accepted) return GameScreen.HUD
+        // An associated panel must not become MENU through the colour fallback.
+        if (hud.menuScore >= 0.78f) return GameScreen.OTHER
         val width = screen.width
         val height = screen.height
         if (width < 320 || height < 240) return GameScreen.OTHER

@@ -51,34 +51,58 @@ class GuildWeeklyBenefitTask(
         }
 
         ctx.log("识别到公会福利 OPEN，点击领取一次并等待周奖励弹窗")
-        ctx.markActionSubmitted("${id}_claim")
-        ctx.device.tap(claimTarget.x, claimTarget.y)
-        val popup = waitForRewardPopup(ctx, rewardPopup, 12_000)
-        if (popup == null) {
-            return stopUncertain(ctx, "点击 OPEN 后未识别到周奖励弹窗，不重复提交领取")
+        var popupSeen = false
+        suspend fun continueClaimResult(): TaskResult {
+            if (!popupSeen) {
+                if (waitForRewardPopup(ctx, rewardPopup, 12_000) == null) {
+                    return stopUncertain(ctx, "点击 OPEN 后未识别到周奖励弹窗，不重复提交领取")
+                }
+                popupSeen = true
+            }
+            var closed = waitForPopupGone(ctx, rewardPopup, 700) && waitForWeeklyPage(ctx, 900) != null
+            repeat(2) { attempt ->
+                if (!closed) {
+                    if (waitForRewardPopup(ctx, rewardPopup, 900) == null) {
+                        return stopUncertain(ctx, "当前未确认周奖励弹窗，不点击旧的关闭坐标")
+                    }
+                    if (!ctx.tryTaskStep("$id:reward_close")) {
+                        return stopUncertain(ctx, "周奖励弹窗关闭已重试一次，停止重复点击")
+                    }
+                    ctx.log(
+                        if (attempt == 0) "识别到周奖励弹窗，点击白框外关闭"
+                        else "周奖励弹窗仍在，重新点击白框外关闭",
+                    )
+                    ctx.tap(popupOutside, 0)
+                    closed = waitForPopupGone(ctx, rewardPopup, 3_000) &&
+                        waitForWeeklyPage(ctx, 3_000) != null
+                }
+            }
+            if (!closed) return stopUncertain(ctx, "点击白框外后未确认周奖励弹窗关闭")
+            if (!waitForClaimResult(ctx, openTemplate, rewardPopup, 5_000)) {
+                return stopUncertain(ctx, "关闭奖励后未连续确认福利页及 OPEN 消失，领取结果不明")
+            }
+            if (ctx.safety.pendingStepId == "${id}_claim") ctx.confirmActionResult()
+            return finish(ctx, "周奖励领取成功")
         }
 
-        var closed = false
-        repeat(3) { attempt ->
-            if (!closed) {
-                ctx.log(
-                    if (attempt == 0) "识别到周奖励弹窗，点击白框外关闭"
-                    else "周奖励弹窗仍在，重新点击白框外关闭",
-                )
-                ctx.tap(popupOutside, 0)
-                closed = waitForPopupGone(ctx, rewardPopup, 3_000) &&
-                    waitForWeeklyPage(ctx, 3_000) != null
+        ctx.onTaskFailureRecovery { screen, _ ->
+            val claimed = GuildScreenDetector.findWeeklyClaimed(screen, claimedTemplate) != null
+            if (claimed && ctx.waitUntil(1_500, 320) { latest ->
+                    GuildScreenDetector.findWeeklyClaimed(latest, claimedTemplate)?.copy(requiresStableFrames = true)
+                } != null) {
+                if (ctx.safety.pendingStepId == "${id}_claim") ctx.confirmActionResult()
+                finish(ctx, "全局验证确认下周可领取，本周奖励已领取")
+            } else {
+                val popupVisible = GuildScreenDetector.findWeeklyRewardPopup(screen, rewardPopup) != null
+                if (popupVisible) popupSeen = true
+                if (popupSeen && (popupVisible || waitForWeeklyPage(ctx, 1_500) != null)) {
+                    continueClaimResult()
+                } else null
             }
         }
-        if (!closed) {
-            return stopUncertain(ctx, "点击白框外后未确认周奖励弹窗关闭")
-        }
-
-        if (!waitForClaimResult(ctx, openTemplate, rewardPopup, 5_000)) {
-            return stopUncertain(ctx, "关闭奖励后未连续确认福利页及 OPEN 消失，领取结果不明")
-        }
-        ctx.confirmActionResult()
-        return finish(ctx, "周奖励领取成功")
+        ctx.markActionSubmitted("${id}_claim")
+        ctx.device.tap(claimTarget.x, claimTarget.y)
+        return continueClaimResult()
     }
 
     private suspend fun openWeeklyBenefitPage(ctx: BotContext): Boolean {
@@ -94,6 +118,7 @@ class GuildWeeklyBenefitTask(
         )
         if (welfare == null) {
             if (GuildNavigation.isDailyPage(ctx, 1_200)) {
+                if (!ctx.tryTaskStep("$id:welfare_tab")) return false
                 ctx.log("已确认仍在公会日常页，福利文字未命中，点击左侧福利区域")
                 ctx.tap(Layout.guildWelfareTab, 0)
                 if (waitForWeeklyPage(ctx, 5_000) != null) return true
@@ -109,6 +134,7 @@ class GuildWeeklyBenefitTask(
                 },
             )
             if (welfare == null && GuildNavigation.isDailyPage(ctx, 1_200)) {
+                if (!ctx.tryTaskStep("$id:welfare_tab")) return false
                 ctx.log("重新确认公会日常页后，点击左侧福利区域")
                 ctx.tap(Layout.guildWelfareTab, 0)
                 return waitForWeeklyPage(ctx, 5_000) != null
@@ -116,7 +142,8 @@ class GuildWeeklyBenefitTask(
         }
         var welfareButton = welfare ?: return false
 
-        repeat(3) { attempt ->
+        repeat(2) { attempt ->
+            if (!ctx.tryTaskStep("$id:welfare_tab")) return false
             ctx.log(if (attempt == 0) "识别到公会左侧福利，点击进入" else "公会福利页未加载，重新识别后再次点击福利")
             ctx.device.tap(welfareButton.point.x, welfareButton.point.y)
             if (waitForWeeklyPage(ctx, 4_000) != null) return true
@@ -260,7 +287,7 @@ class GuildWeeklyBenefitTask(
     }
 
     private suspend fun failAndExit(ctx: BotContext, detail: String): TaskResult {
-        GuildNavigation.exitToGameHud(ctx)
+        ctx.log("$detail，保留当前页面供全局验证")
         return TaskResult(title, false, detail)
     }
 

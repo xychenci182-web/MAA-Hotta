@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 import java.io.File
 import java.io.IOException
+import java.time.LocalDate
 
 data class RunUiState(
     val running: Boolean = false,
@@ -198,6 +199,8 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startRun(loginOnlyId: String?, enableAllAccounts: Boolean = false) {
         if (job?.isCompleted == false) return
+        val runLocalDate = LocalDate.now()
+        val runDayOfWeek = runLocalDate.dayOfWeek.value
         if (config.value.keepAliveEnabled) {
             runCatching { KeepAliveService.start(getApplication()) }
         }
@@ -214,6 +217,10 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                     reportAttachments += attachment
                 }
                 _run.update { it.copy(running = true, stopping = false, logs = emptyList(), lastSummary = "") }
+                if (loginOnlyId == null) {
+                    val weekday = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")[runDayOfWeek - 1]
+                    log("日常启动本地日期：$runLocalDate，$weekday；每日签到使用 DAY $runDayOfWeek")
+                }
                 if (enableAllAccounts) {
                     store.setAllAccountsEnabled(true)
                     log("定时启动：已自动勾选全部保存账号")
@@ -268,6 +275,7 @@ class HottaViewModel(app: Application) : AndroidViewModel(app) {
                             options = conf.options,
                             includeLogin = index == 0,
                             savedAccountPhones = savedAccountPhones,
+                            dayOfWeek = runDayOfWeek,
                             onIslandMerchantDetected = { found ->
                                 islandMerchantCheckedThisRun = true
                                 if (found) {

@@ -11,7 +11,7 @@ object MailScreenDetector {
     private val rewardPopupRegion = SearchRegion(0.08f, 0.25f, 0.48f, 0.48f)
 
     fun findHudMenu(screen: Bitmap, template: HudTemplates?): MatchResult? =
-        GameScreenDetector.findHudMenu(screen, template)
+        GameScreenDetector.findHudMenu(screen, template, exclusions = HudExclusions.NONE)
 
     fun findSocialMenu(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, socialMenuRegion, 0.52f)

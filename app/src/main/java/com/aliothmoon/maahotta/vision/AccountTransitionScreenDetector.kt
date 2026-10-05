@@ -9,7 +9,7 @@ object AccountTransitionScreenDetector {
     private val userCenterRegion = SearchRegion(0.55f, 0.08f, 0.75f, 0.34f)
 
     fun findHudMenu(screen: Bitmap, template: HudTemplates?): MatchResult? =
-        GameScreenDetector.findHudMenu(screen, template)
+        GameScreenDetector.findHudMenu(screen, template, exclusions = HudExclusions.LOGIN)
 
     fun findSettingsMenu(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, settingsMenuRegion, 0.54f)

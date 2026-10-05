@@ -45,16 +45,21 @@ class TrialsTask(private val type: TrialType) : GameTask {
         // Keep the normal order. Only transitions and confirmations are observed.
         val initial = TaskNavigationMachine.observe(ctx)
         if (initial.state == com.aliothmoon.maahotta.vision.PageState.TRIALS_RESULT) {
-            return stopAfterBattle(ctx, "发现遗留作战奖励，本轮尚未提交代理战斗，不能确认其类型及归属")
+            ctx.log("发现遗留作战奖励，先关闭并确认历练窗口；旧奖励不计入本轮完成")
+            val cleanupError = closeRewardAndConfirmDialog(ctx, result, logo, "$id:close_legacy_reward")
+            if (cleanupError != null) return stopAfterBattle(ctx, "遗留奖励清理失败：$cleanupError")
+            ctx.log("遗留奖励已清理，开始本轮$title")
         }
         var resultReady = false
+        var rewardClosed = false
         var proxyReady = initial.state == com.aliothmoon.maahotta.vision.PageState.TRIALS_PROXY
         if (!resultReady && !proxyReady) {
             if (waitForLogo(ctx, logo, 700) == null) {
                 var opened = false
-                for (attempt in 1..3) {
+                for (attempt in 1..2) {
                     val target = enterRequiredHub(ctx, entry) ?: continue
-                    ctx.log("已确认推荐页历练入口，点击进入（$attempt/3）")
+                    ctx.log("已确认必做页历练入口，点击进入（$attempt/2）")
+                    if (!ctx.tryTaskStep("$id:open_dialog")) break
                     ctx.device.tap(target.point.x, target.point.y)
                     if (waitForLogo(ctx, logo, 4_000) != null) { opened = true; break }
                     // Reuse the hub only after recognizing it; unknown screens never get a blind Back.
@@ -64,10 +69,11 @@ class TrialsTask(private val type: TrialType) : GameTask {
             } else ctx.log("已在次元历练窗口，直接复用")
             if (!selectType(ctx)) return stopAfterBattle(ctx, "未能确认$title 页签")
             if (waitForVitalityInsufficient(ctx, vitality, 700) != null) return noVitality()
-            for (attempt in 1..3) {
+            for (attempt in 1..2) {
                 val target = waitForParticipate(ctx, participate, 1_500)
                 if (target != null) {
-                    ctx.log("已确认$title 页签，点击参与（$attempt/3）")
+                    ctx.log("已确认$title 页签，点击参与（$attempt/2）")
+                    if (!ctx.tryTaskStep("$id:participate")) break
                     ctx.device.tap(target.point.x, target.point.y)
                 }
                 val changed = waitForTargetOrVitality(ctx, vitality, 4_000) { frame ->
@@ -86,24 +92,67 @@ class TrialsTask(private val type: TrialType) : GameTask {
             val target = waitForProxy(ctx, proxy, 2_000)
                 ?: return stopAfterBattle(ctx, "代理战斗按钮未确认")
             ctx.log("已确认代理战斗，执行一次并等待作战结果")
+            ctx.onTaskFailureRecovery { screen, page ->
+                // Resume only the submitted battle's result/cleanup, never submit another proxy battle.
+                if (!resultReady && TrialsScreenDetector.findResultSuccess(screen, result) != null) {
+                    resultReady = true
+                    ctx.confirmActionResult()
+                }
+                if (!resultReady) null
+                else if (page.state == com.aliothmoon.maahotta.vision.PageState.HUB) {
+                    TaskResult(title, true, "已完成1次代理战斗；已确认返回必做页")
+                } else finishBattle(ctx, result, logo, rewardClosed) { rewardClosed = true }
+            }
             ctx.markActionSubmitted("$id:proxy_battle")
             ctx.device.tap(target.point.x, target.point.y)
             resultReady = waitForSuccess(ctx, result, 30_000) != null
             if (!resultReady) return stopAfterBattle(ctx, "代理战斗后未确认作战成功，不重复执行")
             ctx.confirmActionResult()
         }
-        for (attempt in 1..3) {
+        return finishBattle(ctx, result, logo, rewardClosed) { rewardClosed = true }
+    }
+
+    private suspend fun finishBattle(
+        ctx: BotContext,
+        result: Bitmap,
+        logo: Bitmap,
+        rewardAlreadyClosed: Boolean,
+        onRewardClosed: () -> Unit,
+    ): TaskResult {
+        if (!rewardAlreadyClosed) {
+            val closeError = closeRewardAndConfirmDialog(ctx, result, logo)
+            if (closeError != null) return stopAfterBattle(ctx, closeError)
+            onRewardClosed()
+        }
+        ctx.log("本轮奖励已关闭，返回并确认必做页后完成任务")
+        if (!TaskNavigationMachine.reach(
+                ctx,
+                com.aliothmoon.maahotta.vision.NavigationGoal.HUB,
+                timeoutMs = 30_000,
+                allowRecovery = false,
+            )) return stopAfterBattle(ctx, "已完成1次代理战斗，但未确认返回必做页，不重复执行")
+        return TaskResult(title, true, "已完成1次代理战斗；已确认返回必做页")
+    }
+
+    /** Closing a reward only restores the dialog; it never confirms a battle result. */
+    private suspend fun closeRewardAndConfirmDialog(
+        ctx: BotContext,
+        result: Bitmap,
+        logo: Bitmap,
+        stepId: String = "$id:close_reward",
+    ): String? {
+        for (attempt in 1..2) {
             if (waitForSuccess(ctx, result, 700) == null) {
-                if (waitForLogo(ctx, logo, 3_000) != null)
-                    return TaskResult(title, true, "已完成1次代理战斗；保留历练窗口")
-                return stopAfterBattle(ctx, "奖励消失后未确认返回历练窗口")
+                return if (waitForLogo(ctx, logo, 3_000) != null) null
+                else "奖励消失后未确认返回历练窗口"
             }
             ctx.log("已确认作战成功奖励，点击白色空白处关闭")
+            if (!ctx.tryTaskStep(stepId)) return "奖励关闭重试1次后仍未完成"
             tapNow(ctx, RelPoint(0.50f, if (attempt % 2 == 1) 0.41f else 0.87f))
         }
         if (waitForSuccess(ctx, result, 700) == null && waitForLogo(ctx, logo, 3_000) != null)
-            return TaskResult(title, true, "已完成1次代理战斗；保留历练窗口")
-        return stopAfterBattle(ctx, "作战成功奖励未能关闭")
+            return null
+        return "作战成功奖励未能关闭或未确认返回历练窗口"
     }
 
     private fun noVitality(): TaskResult = TaskResult.skipped(title, "当前活力不足，已结束历练；保留窗口")
@@ -118,7 +167,20 @@ class TrialsTask(private val type: TrialType) : GameTask {
         ctx: BotContext,
         entryTemplate: Bitmap,
     ): MatchResult? {
-        if (!RequiredHubNavigator.selectRecommendByText(ctx)) return null
+        if (!RequiredHubNavigator.isCurrentHubByText(ctx)) {
+            if (!TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUB)) return null
+            if (!RequiredHubNavigator.isCurrentHubByText(ctx)) return null
+        }
+        ctx.log("左上角已识别必做，先查找当前页次元历练入口")
+        val currentEntry = waitForEntry(ctx, entryTemplate, 3_000)
+        if (currentEntry != null) return currentEntry
+        // Reconfirm the page before using the known tab position; 推荐 needs no OCR/template check.
+        if (!RequiredHubNavigator.isCurrentHubByText(ctx)) return null
+        ctx.log("当前页未找到次元历练入口，已确认必做，固定坐标点击推荐后重新查找")
+        val size = ctx.device.screenSize()
+        if (!ctx.tryTaskStep("hub:select_推荐")) return null
+        ctx.device.tap((size.y * 0.16f).toInt(), (size.y * 0.33f).toInt())
+        delay(900)
         return waitForEntry(ctx, entryTemplate, 3_000)
     }
 
@@ -129,10 +191,11 @@ class TrialsTask(private val type: TrialType) : GameTask {
             TrialType.MATRIX -> RelPoint(0.344f, 0.466f)
             TrialType.GOLD -> RelPoint(0.452f, 0.466f)
         }
-        repeat(3) { attempt ->
+        repeat(2) { attempt ->
             val logo = ctx.templates.get("trials_dialog_logo") ?: return false
             if (waitForLogo(ctx, logo, 700) == null) return false
             ctx.log(if (attempt == 0) "点击$title 页签" else "$title 页签尚未选中，再次点击")
+            if (!ctx.tryTaskStep("$id:select_type")) return false
             tapNow(ctx, point)
             if (waitForSelectedType(ctx, 2_000)) return true
         }

@@ -34,8 +34,9 @@ internal object GuildNavigation {
                 ctx.log("返回后菜单已经展开，直接使用公会入口")
             } else {
                 var menu = waitForHudMenu(ctx, hudMenu, 3_000) ?: return false
-                repeat(3) { attempt ->
+                repeat(2) { attempt ->
                     if (guild == null) {
+                        if (!ctx.tryTaskStep("guild:menu")) return false
                         ctx.log(if (attempt == 0) "点击主界面右上角菜单" else "菜单未展开，重新识别后再次点击")
                         ctx.device.tap(menu.point.x, menu.point.y)
                         guild = waitForMenuGuild(ctx, guildEntry, 3_000)
@@ -50,8 +51,9 @@ internal object GuildNavigation {
         var guildButton = guild ?: return false
 
         var daily: MatchResult? = null
-        repeat(3) { attempt ->
+        repeat(2) { attempt ->
             if (daily == null) {
+                if (!ctx.tryTaskStep("guild:entry")) return false
                 ctx.log(if (attempt == 0) "识别到公会按键，点击进入" else "公会页未打开，重新识别后再次点击公会")
                 ctx.device.tap(guildButton.point.x, guildButton.point.y)
                 daily = waitForDailyTab(ctx, dailyTab, 4_000)
@@ -63,7 +65,8 @@ internal object GuildNavigation {
         }
         var dailyButton = daily ?: return false
 
-        repeat(3) { attempt ->
+        repeat(2) { attempt ->
+            if (!ctx.tryTaskStep("guild:daily_tab")) return false
             ctx.log(if (attempt == 0) "识别到公会页下方日常，点击进入" else "公会日常内容未加载，重新识别后再次点击日常")
             ctx.device.tap(dailyButton.point.x, dailyButton.point.y)
             val pageReady = ctx.waitUntil(4_000, 350) { screen ->
@@ -90,13 +93,14 @@ internal object GuildNavigation {
     suspend fun exitToGameHud(ctx: BotContext): Boolean {
         if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.GAME)
         if (ctx.hasEnteredGame()) return true
-        repeat(3) {
+        repeat(2) {
             if (ctx.dismissLineSwitch()) {
                 delay(500)
                 if (ctx.hasEnteredGame()) return true
                 return@repeat
             }
             if (ctx.hasEnteredGame()) return true
+            if (!ctx.tryTaskStep("guild:back")) return false
             ctx.log("点击左上角公会返回")
             ctx.tap(Layout.back, 0)
             if (waitForGameHud(ctx, 5_000)) return true
@@ -116,13 +120,14 @@ internal object GuildNavigation {
     private suspend fun ensureGameHud(ctx: BotContext): Boolean {
         if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.GAME)
         if (ctx.hasEnteredGame()) return true
-        repeat(4) {
+        repeat(2) {
             if (ctx.dismissLineSwitch()) {
                 delay(500)
                 if (ctx.hasEnteredGame()) return true
                 return@repeat
             }
             if (ctx.hasEnteredGame()) return true
+            if (!ctx.tryTaskStep("guild:back")) return false
             ctx.tap(Layout.back, 0)
             if (waitForGameHud(ctx, 3_000)) return true
         }

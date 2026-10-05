@@ -6,12 +6,14 @@ import com.aliothmoon.maahotta.data.TaskOptions
 import com.aliothmoon.maahotta.data.isEnabled
 import com.aliothmoon.maahotta.data.orderedDailyTasks
 import com.aliothmoon.maahotta.engine.GameTask
+import java.time.LocalDate
 
 fun buildDailyTasks(
     account: GameAccount,
     options: TaskOptions,
     includeLogin: Boolean = true,
     savedAccountPhones: List<String> = listOf(account.username),
+    dayOfWeek: Int = LocalDate.now().dayOfWeek.value,
     onIslandMerchantDetected: suspend (Boolean) -> Unit = {},
 ): List<GameTask> {
     val tasks = mutableListOf<GameTask>()
@@ -20,6 +22,7 @@ fun buildDailyTasks(
     ordered.forEachIndexed { index, task ->
         when (task) {
             DailyTask.CHECK_IN -> tasks += CheckInTask(
+                dayOfWeek = dayOfWeek,
                 keepWelfareOpenForSupply = ordered.getOrNull(index + 1) == DailyTask.SUPPLY,
             )
             DailyTask.SUPPLY -> tasks += SupplyTask()
