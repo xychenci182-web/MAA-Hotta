@@ -1,62 +1,12 @@
 package com.aliothmoon.maahotta.vision
 
 import android.graphics.Bitmap
-import android.graphics.Point
 
 data class PageObservation(val state: PageState, val controls: Map<String, MatchResult> = emptyMap())
 
 /** All evidence and click targets belong to the same screenshot. Specific pages precede HUD. */
 object PageStateDetector {
-    /** Extra failure-only checks do not add work to each normal task-navigation frame. */
-    fun inspectForRecovery(screen: Bitmap, template: (String) -> Bitmap?, hud: HudTemplates?,
-        hudExclusions: HudExclusions = HudExclusions.TIMER): PageObservation {
-        val lineTitle = template("line_switch_title")?.let {
-            TemplateMatcher.match(screen, it, threshold = 0.80f,
-                region = SearchRegion(0.12f, 0.16f, 0.50f, 0.38f), referenceHeight = 561)
-        }
-        if (lineTitle != null) {
-            val cancel = template("line_switch_cancel")?.let {
-                TemplateMatcher.match(screen, it, threshold = 0.78f,
-                    region = SearchRegion(0.20f, 0.54f, 0.53f, 0.79f), referenceHeight = 561)
-            } ?: MatchResult(Point((screen.width / 2f - screen.height * 0.18f).toInt(),
-                (screen.height * 0.665f).toInt()), 1f)
-            return PageObservation(PageState.LINE_SELECTION, mapOf("cancel" to cancel))
-        }
-        if (AnnouncementDetector.hasLayout(screen)) {
-            val heading = template("announcement_title")?.let {
-                TemplateMatcher.match(screen, it, threshold = 0.64f,
-                    region = SearchRegion(screen.height * 0.03f / screen.width, 0.09f,
-                        screen.height * 0.70f / screen.width, 0.29f),
-                    referenceHeight = TemplateMatcher.LOGIN_REFERENCE_HEIGHT)
-            }
-            if (heading != null) {
-                val close = AnnouncementDetector.findClose(screen) ?: template("announcement_close")?.let {
-                    TemplateMatcher.match(screen, it, threshold = 0.60f,
-                        region = SearchRegion(1f - screen.height * 0.42f / screen.width, 0.07f,
-                            1f - screen.height * 0.01f / screen.width, 0.32f),
-                        referenceHeight = TemplateMatcher.LOGIN_REFERENCE_HEIGHT)
-                }
-                return PageObservation(PageState.ANNOUNCEMENT,
-                    close?.let { mapOf("close" to it) } ?: emptyMap())
-            }
-        }
-        // These panels must win over a HUD icon still visible behind them.
-        if (AccountScreenDetector.isUserCenter(screen) || AccountScreenDetector.isQuickLogin(screen) ||
-            AccountScreenDetector.isAccountList(screen) || AccountScreenDetector.findPasswordSubmit(screen) != null) {
-            return PageObservation(PageState.LOGIN_ACCOUNT)
-        }
-        TrialsScreenDetector.findResultSuccess(screen, template("trials_result_success"))?.takeIf { it.score >= 0.70f }?.let {
-            return PageObservation(PageState.TRIALS_RESULT)
-        }
-        if (CheckInScreenDetector.isRewardPopup(screen)) return PageObservation(PageState.REWARD)
-        TitleScreenDetector.findUnobstructedEntry(screen)?.let {
-            return PageObservation(PageState.LOGIN_TITLE, mapOf("entry" to it))
-        }
-        return inspect(screen, template, hud, hudExclusions = hudExclusions)
-    }
-
-    fun inspect(screen: Bitmap, template: (String) -> Bitmap?, hud: HudTemplates?, focus: NavigationGoal? = null,
-        hudExclusions: HudExclusions = HudExclusions.TIMER): PageObservation {
+    fun inspect(screen: Bitmap, template: (String) -> Bitmap?, hud: HudTemplates?, focus: NavigationGoal? = null): PageObservation {
         fun observed(state: PageState, vararg controls: Pair<String, MatchResult?>) =
             PageObservation(state, controls.mapNotNull { (key, hit) -> hit?.let { key to it } }.toMap())
         fun expandedMenu(): PageObservation? {
@@ -124,9 +74,9 @@ object PageStateDetector {
             }
             if (RequiredHubScreenDetector.hasMultipleTabs(screen, template)) return observed(PageState.HUB)
         }
-        // Only the source task/page supplies negative HUD evidence.
+        // inspectHud already excludes instance timers, warp, exit modals and login panels.
         // Avoid scanning unrelated trial/mail templates before each of the three HUD frames.
-        val detection = GameScreenDetector.inspectHud(screen, hud, exclusions = hudExclusions)
+        val detection = GameScreenDetector.inspectHud(screen, hud)
         // The expanded menu leaves the HUD anchor visible underneath. Its destination
         // controls must win over that anchor, while rejected dungeon frames stay below.
         if (detection.accepted) return expandedMenu() ?: observed(PageState.HUD, "menu" to detection.menu)

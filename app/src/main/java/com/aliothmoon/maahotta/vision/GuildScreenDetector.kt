@@ -21,7 +21,7 @@ object GuildScreenDetector {
     private val rewardDotX = floatArrayOf(0.623f, 0.689f, 0.755f, 0.822f, 0.889f, 0.957f)
 
     fun findHudMenu(screen: Bitmap, template: HudTemplates?): MatchResult? =
-        GameScreenDetector.findHudMenu(screen, template, exclusions = HudExclusions.GUILD)
+        GameScreenDetector.findHudMenu(screen, template)
 
     fun findMenuGuild(screen: Bitmap, template: Bitmap?): MatchResult? =
         bestMatch(screen, template, menuGuildRegion, 0.54f)

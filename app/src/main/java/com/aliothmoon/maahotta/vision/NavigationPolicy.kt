@@ -8,15 +8,12 @@ enum class PageState(val label: String) {
     GUILD("公会页"), GUILD_DAILY("公会日常页"), GUILD_INFO("公会信息页"), GUILD_WELFARE("公会福利页"),
     REWARD("奖励弹层"), BYGONE_FLOOR("旧日潜入页"), BYGONE_WARP("旧日跃迁中"),
     BYGONE_SCENE("旧日副本场景"), BYGONE_CONFIRM("旧日退出确认"),
-    LINE_SELECTION("线路选择弹窗"), ANNOUNCEMENT("游戏公告"), REWARD_RECOVERY("奖励找回弹窗"),
-    LOGIN_TITLE("登陆首页"), LOGIN_ACCOUNT("账号登录/用户中心"),
 }
 
 enum class NavigationGoal { HUD, GAME, MAIL, WELFARE, HUB, KITCHEN, TRIALS, ISLAND, GUILD, GUILD_DAILY, SETTINGS, BYGONE }
 enum class NavigationAction {
     READY, WAIT, BACK, CLOSE_MENU, OPEN_MENU, OPEN_GIFT, OPEN_HUB, OPEN_SOCIAL,
     OPEN_MAIL, OPEN_GUILD, SELECT_GUILD_DAILY, CLOSE_REWARD, CLOSE_TRIALS_RESULT, EXIT_BYGONE, CONFIRM_BYGONE,
-    CANCEL_LINE, CLOSE_ANNOUNCEMENT, CLOSE_RECOVERY,
 }
 
 /** Pure transition policy: no actions on an unknown page, and no HUD shortcut from a dungeon. */
@@ -31,13 +28,10 @@ object NavigationPolicy {
     }
 
     fun next(state: PageState, goal: NavigationGoal): NavigationAction {
-        if (state in setOf(PageState.UNKNOWN, PageState.LOGIN_TITLE, PageState.LOGIN_ACCOUNT)) return NavigationAction.WAIT
+        if (state == PageState.UNKNOWN) return NavigationAction.WAIT
         if (goal == NavigationGoal.BYGONE && state in setOf(PageState.BYGONE_FLOOR,
                 PageState.BYGONE_WARP, PageState.BYGONE_SCENE, PageState.BYGONE_CONFIRM)) return NavigationAction.READY
         when (state) {
-            PageState.LINE_SELECTION -> return NavigationAction.CANCEL_LINE
-            PageState.ANNOUNCEMENT -> return NavigationAction.CLOSE_ANNOUNCEMENT
-            PageState.REWARD_RECOVERY -> return NavigationAction.CLOSE_RECOVERY
             PageState.BYGONE_WARP -> return NavigationAction.WAIT
             PageState.BYGONE_SCENE -> return NavigationAction.EXIT_BYGONE
             PageState.BYGONE_CONFIRM -> return NavigationAction.CONFIRM_BYGONE

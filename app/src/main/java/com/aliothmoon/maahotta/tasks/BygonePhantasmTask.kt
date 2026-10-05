@@ -13,10 +13,8 @@ import kotlin.math.roundToInt
 class BygonePhantasmTask : GameTask {
     override val id = "bygone_phantasm"
     override val title = "旧日幻想"
-    private var enteredSceneConfirmed = false
 
     override suspend fun run(ctx: BotContext): TaskResult {
-        enteredSceneConfirmed = false
         val entryTemplate = ctx.templates.get("entry_bygone_phantasm")
             ?: return TaskResult(title, false, "旧日幻想入口模板未载入")
         val diveNextTemplate = ctx.templates.get("bygone_dive_next")
@@ -35,17 +33,12 @@ class BygonePhantasmTask : GameTask {
         // Resume from the actual dungeon state, never open the Must-do hub over it.
         val current = TaskNavigationMachine.observe(ctx)
         if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_CONFIRM) {
-            registerExitRecovery(ctx, exitDialogTemplate, confirmTemplate, sceneTimerTemplate,
-                diveNextTemplate, skipTemplate, warpStartTemplate, sceneWasConfirmed = true)
             ctx.markActionSubmitted("$id:resume_dungeon")
             return exitScene(ctx, null, exitDialogTemplate, confirmTemplate,
                 sceneTimerTemplate, diveNextTemplate, skipTemplate)
         }
         if (current.state in setOf(com.aliothmoon.maahotta.vision.PageState.BYGONE_SCENE,
                 com.aliothmoon.maahotta.vision.PageState.BYGONE_WARP)) {
-            registerExitRecovery(ctx, exitDialogTemplate, confirmTemplate, sceneTimerTemplate,
-                diveNextTemplate, skipTemplate, warpStartTemplate,
-                sceneWasConfirmed = current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_SCENE)
             ctx.markActionSubmitted("$id:resume_dungeon")
             val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
                 warpStartTemplate, sceneTimerTemplate, 45_000)
@@ -56,8 +49,6 @@ class BygonePhantasmTask : GameTask {
         if (current.state == com.aliothmoon.maahotta.vision.PageState.BYGONE_FLOOR) {
             val dive = waitForDiveNext(ctx, diveNextTemplate, 2_000)
                 ?: return stopAfterDive(ctx, "旧日潜入页未确认潜入按钮")
-            registerExitRecovery(ctx, exitDialogTemplate, confirmTemplate, sceneTimerTemplate,
-                diveNextTemplate, skipTemplate, warpStartTemplate, sceneWasConfirmed = false)
             ctx.markActionSubmitted("$id:dive")
             ctx.device.tap(dive.point.x, dive.point.y)
             val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
@@ -67,9 +58,9 @@ class BygonePhantasmTask : GameTask {
                 sceneTimerTemplate, diveNextTemplate, skipTemplate)
         }
         var lastFailure = "未进入旧日幻想"
-        for (attempt in 1..2) {
+        for (attempt in 1..3) {
             ctx.log("旧日幻想第 $attempt 次尝试")
-            if (!RequiredHubNavigator.selectChallengeAtFixedPosition(ctx)) {
+            if (!RequiredHubNavigator.selectChallengeByText(ctx)) {
                 lastFailure = "未能进入必做页或点击挑战"
                 ctx.log(lastFailure)
                 continue
@@ -83,9 +74,8 @@ class BygonePhantasmTask : GameTask {
             }
             var entryButton = requireNotNull(entry)
             var diveNext: MatchResult? = null
-            for (entryAttempt in 1..2) {
+            for (entryAttempt in 1..3) {
                 ctx.log(if (entryAttempt == 1) "已识别中央旧日幻想卡片，点击进入" else "旧日页面未打开，重新识别后再次点击卡片")
-                if (!ctx.tryTaskStep("$id:open_floor")) break
                 ctx.device.tap(entryButton.point.x, entryButton.point.y)
                 diveNext = waitForDiveNext(ctx, diveNextTemplate, 5_000)
                 if (diveNext != null) break
@@ -107,8 +97,6 @@ class BygonePhantasmTask : GameTask {
                 continue
             }
             ctx.log("识别到潜入按钮，点击进入副本")
-            registerExitRecovery(ctx, exitDialogTemplate, confirmTemplate, sceneTimerTemplate,
-                diveNextTemplate, skipTemplate, warpStartTemplate, sceneWasConfirmed = false)
             ctx.markActionSubmitted("$id:dive")
             ctx.device.tap(diveNext.point.x, diveNext.point.y)
 
@@ -123,43 +111,7 @@ class BygonePhantasmTask : GameTask {
             return exitScene(ctx, firstExit, exitDialogTemplate, confirmTemplate,
                 sceneTimerTemplate, diveNextTemplate, skipTemplate)
         }
-        return TaskResult(title, false, "$lastFailure；重试1次后仍失败")
-    }
-
-    private fun registerExitRecovery(
-        ctx: BotContext,
-        exitDialogTemplate: Bitmap,
-        confirmTemplate: Bitmap,
-        sceneTimerTemplate: Bitmap,
-        diveNextTemplate: Bitmap,
-        skipTemplate: Bitmap,
-        warpStartTemplate: Bitmap,
-        sceneWasConfirmed: Boolean,
-    ) {
-        if (sceneWasConfirmed) enteredSceneConfirmed = true
-        ctx.onTaskFailureRecovery { _, page ->
-            when (page.state) {
-                com.aliothmoon.maahotta.vision.PageState.BYGONE_CONFIRM -> exitScene(
-                    ctx, null, exitDialogTemplate, confirmTemplate,
-                    sceneTimerTemplate, diveNextTemplate, skipTemplate,
-                )
-                com.aliothmoon.maahotta.vision.PageState.BYGONE_SCENE -> exitScene(
-                    ctx, MatchResult(fixedExitPoint(ctx), 1f), exitDialogTemplate, confirmTemplate,
-                    sceneTimerTemplate, diveNextTemplate, skipTemplate,
-                )
-                com.aliothmoon.maahotta.vision.PageState.BYGONE_WARP -> {
-                    val exit = waitThroughEntryAnimation(ctx, skipTemplate, diveNextTemplate,
-                        warpStartTemplate, sceneTimerTemplate, 45_000)
-                    if (exit == null) null else exitScene(ctx, exit, exitDialogTemplate, confirmTemplate,
-                        sceneTimerTemplate, diveNextTemplate, skipTemplate)
-                }
-                com.aliothmoon.maahotta.vision.PageState.HUD -> if (enteredSceneConfirmed && ctx.hasEnteredGame()) {
-                    if (ctx.safety.pendingStepId != null) ctx.confirmActionResult()
-                    TaskResult(title, true, "已确认旧日幻想场景并返回游戏主界面")
-                } else null
-                else -> null
-            }
-        }
+        return TaskResult(title, false, "$lastFailure；已重试3次")
     }
 
     private suspend fun exitScene(
@@ -167,16 +119,12 @@ class BygonePhantasmTask : GameTask {
         sceneTimerTemplate: Bitmap, diveNextTemplate: Bitmap, skipTemplate: Bitmap,
     ): TaskResult {
         if (firstExit != null) {
-            enteredSceneConfirmed = true
-            ctx.log("退出点击第 1/2 次：已确认副本，按固定坐标退出 (${firstExit.point.x}, ${firstExit.point.y})")
-            if (!ctx.tryTaskStep("$id:exit_scene")) {
-                return stopAfterDive(ctx, "退出按钮重试1次后仍未完成")
-            }
+            ctx.log("退出点击第 1/3 次：已确认副本，按固定坐标退出 (${firstExit.point.x}, ${firstExit.point.y})")
             ctx.device.tap(firstExit.point.x, firstExit.point.y)
         }
 
         var confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
-        for (exitAttempt in 2..2) {
+        for (exitAttempt in 2..3) {
             if (confirm != null) break
             var dialogVisible = false
             val retryTarget = ctx.waitUntil(3_000, 350) { screen ->
@@ -188,32 +136,28 @@ class BygonePhantasmTask : GameTask {
                 ) MatchResult(Point(0, 0), 1f) else null
             }
             if (retryTarget == null) {
-                ctx.log("第 $exitAttempt/2 次：无法确认旧日场景或弹窗按钮，本次不点击")
+                ctx.log("第 $exitAttempt/3 次：无法确认旧日场景或弹窗按钮，本次不点击")
                 continue
             }
             if (dialogVisible) {
                 confirm = retryTarget
                 break
             }
-            ctx.log("仍在旧日幻想且未出现退出确认弹窗，按固定坐标再次点击退出（第 $exitAttempt/2 次）")
-            if (!ctx.tryTaskStep("$id:exit_scene")) break
+            ctx.log("仍在旧日幻想且未出现退出确认弹窗，按固定坐标再次点击退出（第 $exitAttempt/3 次）")
             val point = fixedExitPoint(ctx)
             ctx.device.tap(point.x, point.y)
             confirm = waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 4_000)
         }
         val confirmButton = confirm
-            ?: return stopAfterDive(ctx, "退出流程重试1次后，仍未识别到退出确认弹窗和确定按钮")
+            ?: return stopAfterDive(ctx, "退出流程已尝试3轮，仍未识别到退出确认弹窗和确定按钮")
         var returnedToGame = false
-        repeat(2) { confirmAttempt ->
+        repeat(3) { confirmAttempt ->
             if (!returnedToGame) {
                 val currentConfirm = if (confirmAttempt == 0) confirmButton else
                     waitForExitConfirmation(ctx, exitDialogTemplate, confirmTemplate, 1_500)
                 if (currentConfirm != null) {
                     ctx.log(if (confirmAttempt == 0) "识别到退出确认弹窗，点击确定"
                         else "尚未识别到主界面菜单，确认退出弹窗仍在，再次点击确定")
-                    if (!ctx.tryTaskStep("$id:exit_confirm")) {
-                        return stopAfterDive(ctx, "退出确定按钮重试1次后仍未完成")
-                    }
                     ctx.device.tap(currentConfirm.point.x, currentConfirm.point.y)
                 } else {
                     ctx.log("未识别到退出确认弹窗，继续等待主界面菜单")
@@ -317,11 +261,10 @@ class BygonePhantasmTask : GameTask {
                     }
                 } else if (frame.skip != null) {
                     if (skipClickCount == 0 || now - lastSkipTapAt >= 700) {
-                        if (skipClickCount >= 2) {
-                            ctx.log("跳过按钮重试1次后仍在，停止并保存截图")
+                        if (skipClickCount >= 3) {
+                            ctx.log("点击跳过3次后按钮仍在，停止并保存截图")
                             return null
                         }
-                        if (!ctx.tryTaskStep("$id:skip")) return null
                         skipClickCount++
                         ctx.log("识别到跳过按钮，点击后继续等待")
                         ctx.device.tap(frame.skip.point.x, frame.skip.point.y)

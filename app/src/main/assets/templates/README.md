@@ -24,7 +24,6 @@ Android Studio 左侧：`app` → `src` → `main` → `assets` → `templates`
 | pwd_login.png | 密码页「登录」 |
 | announcement_close.png | 游戏公告右上角红色 X |
 | announcement_title.png | 「游戏公告」标题（用来认出这页） |
-| reward_recovery_title.png | 「奖励找回」红色标题。只在 1280×720 画面的固定位置匹配，用于首次登陆和后续切号关闭弹窗 |
 | hud_gift_icon.png | 游戏内右上角礼盒图标（登录成功判断之一） |
 | hud_crossed_icon.png | 游戏内右上角交叉图标（登录成功判断之一） |
 | hud_gift_icon_new.png | 当前样式的游戏内礼盒图标，旧模板未命中时使用 |
@@ -73,7 +72,6 @@ Android Studio 左侧：`app` → `src` → `main` → `assets` → `templates`
 | bygone_exit_dialog.png | “是否离开旧日幻想副本”确认文字 |
 | bygone_exit_confirm.png | 旧日幻想退出弹窗“确定”按钮 |
 | hud_hex_menu_icon.png | 游戏主界面右上角六边形菜单图标 |
-| hud_menu_body.png | 登陆页面设置 |
 | guild_menu_entry.png | 展开菜单中的“公会”按键 |
 | guild_page_title.png | 公会页面固定标题，快速确认信息、日常与福利页 |
 | guild_daily_tab.png | 公会页面底部“日常”页签 |

@@ -15,18 +15,20 @@ import com.aliothmoon.maahotta.vision.ScreenTextMatch
 import com.aliothmoon.maahotta.vision.WelfareNavigationDetector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
-import java.time.LocalDate
 
 class CheckInTask(
     private val keepWelfareOpenForSupply: Boolean = false,
-    private val dayOfWeek: Int = LocalDate.now().dayOfWeek.value,
 ) : GameTask {
     override val id = "check_in"
     override val title = "每日签到"
 
+    private sealed interface ClaimState {
+        data class Available(val point: Point) : ClaimState
+        /** Rightmost claimed day ordinal 0..7; 7 means D7 is checked and today is done. */
+        data class AlreadyClaimed(val lastClaimedDay: Int) : ClaimState
+    }
+
     override suspend fun run(ctx: BotContext): TaskResult {
-        if (dayOfWeek !in 1..7) return TaskResult(title, false, "本地星期无效，停止签到", retryable = false)
-        ctx.log("按日常启动时的本地星期选择签到 DAY $dayOfWeek")
         val hudMenu = ctx.hudTemplates()
             ?: return TaskResult(title, false, "主界面菜单模板未载入")
         var alreadyOnPage = ctx.waitUntil(700, 250) { screen ->
@@ -40,7 +42,7 @@ class CheckInTask(
         if (!alreadyOnPage) {
             var entered = false
             var lastFailure = "未进入福利签到页"
-            for (attempt in 1..2) {
+            for (attempt in 1..3) {
                 if (!returnToGame(ctx)) {
                     return TaskResult(title, false, "重试前无法返回游戏主界面")
                 }
@@ -54,83 +56,141 @@ class CheckInTask(
                     continue
                 }
                 ctx.log("菜单锚点定位礼盒（向左4格）score=${"%.2f".format(gift.score)}，点击 (${gift.point.x},${gift.point.y})")
-                if (!ctx.tryTaskStep("$id:gift")) {
-                    return TaskResult(title, false, "礼盒入口已重试一次，停止重复点击")
-                }
                 ctx.device.tap(gift.point.x, gift.point.y)
                 if (openSignInAfterGift(ctx, hudMenu)) {
                     entered = true
                     break
                 }
                 lastFailure = "等待并重试后仍未进入福利签到页"
-                if (attempt == 2) break
-                ctx.log("$lastFailure，返回游戏主界面重试一次")
+                ctx.log("$lastFailure，返回游戏主界面重试")
                 if (!returnToGame(ctx)) {
                     return TaskResult(title, false, "$lastFailure；无法返回游戏主界面")
                 }
             }
-            if (!entered) return TaskResult(title, false, "$lastFailure；初次尝试及一次重试均未成功")
+            if (!entered) return TaskResult(title, false, "$lastFailure；已重试3次")
         }
 
-        val rewardPopupTemplate = ctx.templates.get("mail_reward_popup")
-        var dayHighlighted = false
-        val claim = ctx.waitUntil(8_000, 500) { screen ->
-            if (isRewardPopup(screen, rewardPopupTemplate)) return@waitUntil null
-            val day = CheckInScreenDetector.findDay(screen, dayOfWeek) ?: return@waitUntil null
-            // Locate and inspect this DAY on the same frame, before submitting any click.
-            dayHighlighted = CheckInScreenDetector.hasDayHighlight(screen, dayOfWeek)
-            day
-        } ?: return failUnknown(ctx, "未能确认签到 DAY $dayOfWeek 的位置，不点击其他 DAY")
-        if (!dayHighlighted) {
-            ctx.log("签到 DAY $dayOfWeek 没有黄色高亮，不点击，直接结束签到任务")
-            return finish(ctx, true, "签到 DAY $dayOfWeek 无黄色高亮，已结束")
-        }
-        ctx.log("签到 DAY $dayOfWeek 有黄色高亮，点击 (${claim.point.x},${claim.point.y})，等待奖励弹窗")
-        var rewardAppeared = false
-        ctx.onTaskFailureRecovery { screen, _ ->
-            val popupVisible = isRewardPopup(screen, rewardPopupTemplate)
-            if (popupVisible) rewardAppeared = true
-            when {
-                popupVisible -> closeRewardPopup(ctx, rewardPopupTemplate)
-                rewardAppeared && CheckInScreenDetector.isSignInPage(screen) -> {
-                    if (ctx.safety.pendingStepId == "$id:claim_day_$dayOfWeek") ctx.confirmActionResult()
-                    finish(ctx, true, "签到 DAY $dayOfWeek 奖励弹窗已关闭（全局验证）")
+        val claim = when (val state = waitForClaimState(ctx)) {
+            is ClaimState.Available -> state.point
+            is ClaimState.AlreadyClaimed -> {
+                val detail = if (state.lastClaimedDay >= 7) {
+                    ctx.log("签到页稳定：D7 已打勾，本轮签到已完成")
+                    "今日签到已领取（D7 已打勾）"
+                } else if (state.lastClaimedDay <= 0) {
+                    ctx.log("签到页稳定：无对勾且 D1 无可领取高亮，今日签到已完成")
+                    "今日签到已领取，无待领取奖励"
+                } else {
+                    val nextDay = state.lastClaimedDay + 1
+                    ctx.log(
+                        "签到页稳定：最右对勾为 D${state.lastClaimedDay}，D$nextDay 无可领取高亮，今日签到已完成",
+                    )
+                    "今日签到已领取，无待领取奖励"
                 }
-                else -> null
+                return finish(ctx, true, detail)
+                    .let { if (it.ok) it.copy(outcome = com.aliothmoon.maahotta.engine.TaskOutcome.ALREADY_COMPLETED) else it }
+            }
+            null -> return failUnknown(ctx, "签到页未确认下一格可领取高亮，也无法稳定确认今日已领取，结果不明")
+        }
+        val rewardPopupTemplate = ctx.templates.get("mail_reward_popup")
+        val xRatio = claim.x.toFloat() / ctx.device.screenSize().x
+        ctx.log("找到黄色高亮的签到奖励，领取一次并等待明确结果")
+        ctx.markActionSubmitted("$id:claim_reward")
+        ctx.device.tap(claim.x, claim.y)
+        var popupVisible = false
+        val changed = ctx.waitUntil(12_000, 500) { screen ->
+            if (isRewardPopup(screen, rewardPopupTemplate)) {
+                popupVisible = true
+                center(screen)
+            } else if (CheckInScreenDetector.isSignInPage(screen) &&
+                CheckInScreenDetector.hasClaimCheck(screen, xRatio) &&
+                CheckInScreenDetector.findClaimable(screen) == null
+            ) {
+                center(screen).copy(requiresStableFrames = true)
+            } else {
+                null
             }
         }
-        ctx.markActionSubmitted("$id:claim_day_$dayOfWeek")
-        ctx.device.tap(claim.point.x, claim.point.y)
-
-        // After the single DAY click, only observe the reward overlay and its dismissal.
-        rewardAppeared = ctx.waitUntil(12_000, 500) { screen ->
-            if (isRewardPopup(screen, rewardPopupTemplate)) center(screen) else null
-        } != null
-        if (!rewardAppeared) {
-            return failUnknown(ctx, "点击 DAY $dayOfWeek 后未识别到奖励弹窗，停止任务，不重复领取")
+        if (changed == null) return failUnknown(ctx, "点击签到奖励后结果无法确认，不重复领取")
+        if (popupVisible && !closeRewardPopup(ctx, rewardPopupTemplate, xRatio)) {
+            return failUnknown(ctx, "奖励弹窗未能关闭并确认对勾")
         }
-        return closeRewardPopup(ctx, rewardPopupTemplate)
+        ctx.confirmActionResult()
+        return finish(ctx, true, if (popupVisible) "已领取并关闭奖励弹窗" else "已领取签到奖励")
     }
 
-    private suspend fun closeRewardPopup(ctx: BotContext, rewardPopupTemplate: Bitmap?): TaskResult {
-        repeat(2) { attempt ->
-            val size = ctx.device.screenSize()
-            if (!ctx.tryTaskStep("$id:reward_close")) {
-                return failUnknown(ctx, "签到奖励弹窗关闭已重试一次，停止重复点击")
-            }
-            ctx.log("已识别奖励弹窗，点击上方空白处关闭（第 ${attempt + 1}/2 次）")
-            ctx.device.tap(size.x / 2, (size.y * 0.12f).toInt())
-            val closed = ctx.waitUntil(3_000, 500) { screen ->
-                if (!isRewardPopup(screen, rewardPopupTemplate)) center(screen) else null
-            } != null
-            if (closed) {
-                if (ctx.safety.pendingStepId == "$id:claim_day_$dayOfWeek") ctx.confirmActionResult()
-                ctx.log("签到奖励弹窗已关闭，完成 DAY $dayOfWeek，不再检查对勾")
-                return finish(ctx, true, "签到 DAY $dayOfWeek 奖励弹窗已关闭")
-            }
-            if (attempt < 1) ctx.log("签到奖励弹窗仍在，重试一次点击上方空白处关闭")
+    private suspend fun waitForClaimState(ctx: BotContext): ClaimState? {
+        var alreadyClaimedDay: Int? = null
+        var observedLastClaimed: Int? = null
+        var observedSince = 0L
+        var stableFrames = 0
+        fun resetCompletedEvidence() {
+            observedLastClaimed = null
+            observedSince = 0L
+            stableFrames = 0
         }
-        return failUnknown(ctx, "签到奖励弹窗关闭重试一次后仍未确认消失，停止任务")
+        val found = ctx.waitUntil(8_000, 500) { screen ->
+            alreadyClaimedDay = null
+            // Route by the rightmost check only: no checks → inspect D1; D4 checked → D5;
+            // D7 checked → today is done. Do not wrap D7 back to D1 on the same day.
+            val lastClaimed = CheckInScreenDetector.lastClaimedDay(screen)
+            if (lastClaimed == null) {
+                resetCompletedEvidence()
+                return@waitUntil null
+            }
+            if (lastClaimed >= 7) {
+                val now = ctx.elapsedRealtime()
+                if (observedLastClaimed != 7) {
+                    observedLastClaimed = 7
+                    observedSince = now
+                    stableFrames = 1
+                    return@waitUntil null
+                }
+                stableFrames++
+                if (stableFrames < 3 || now - observedSince < 2_000L) return@waitUntil null
+                alreadyClaimedDay = 7
+                return@waitUntil center(screen)
+            }
+            val available = CheckInScreenDetector.nextClaimable(screen)
+            if (available != null) return@waitUntil available
+            // Only the next slot after the rightmost check may still be lighting up.
+            if (CheckInScreenDetector.hasPossibleNextClaimable(screen)) {
+                resetCompletedEvidence()
+                return@waitUntil null
+            }
+            val now = ctx.elapsedRealtime()
+            if (observedLastClaimed != lastClaimed) {
+                observedLastClaimed = lastClaimed
+                observedSince = now
+                stableFrames = 1
+                return@waitUntil null
+            }
+            stableFrames++
+            if (stableFrames < 3 || now - observedSince < 2_000L) return@waitUntil null
+            alreadyClaimedDay = lastClaimed
+            center(screen)
+        } ?: return null
+        return alreadyClaimedDay?.let(ClaimState::AlreadyClaimed) ?: ClaimState.Available(found.point)
+    }
+
+    private suspend fun closeRewardPopup(ctx: BotContext, template: Bitmap?, xRatio: Float): Boolean {
+        repeat(3) {
+            val size = ctx.device.screenSize()
+            ctx.log("已识别奖励弹窗，点击上方空白处关闭")
+            ctx.device.tap(size.x / 2, (size.y * 0.12f).toInt())
+            if (ctx.waitUntil(3_000, 500) { screen ->
+                    if (!isRewardPopup(screen, template) &&
+                        CheckInScreenDetector.isSignInPage(screen) &&
+                        CheckInScreenDetector.hasClaimCheck(screen, xRatio) &&
+                        CheckInScreenDetector.findClaimable(screen) == null
+                    ) {
+                        center(screen).copy(requiresStableFrames = true)
+                    } else {
+                        null
+                    }
+                } != null
+            ) return true
+        }
+        return false
     }
 
     private suspend fun failUnknown(ctx: BotContext, reason: String): TaskResult {
@@ -155,7 +215,6 @@ class CheckInTask(
         var lastGiftTapAt = ctx.elapsedRealtime()
         var welfareSelected = false
         var lastWelfareTapAt = 0L
-        val navigationTapCounts = mutableMapOf<String, Int>()
 
         while (ctx.elapsedRealtime() < deadline) {
             val page = ctx.waitUntil(700, 250) { screen ->
@@ -165,13 +224,9 @@ class CheckInTask(
 
             val now = ctx.elapsedRealtime()
             val canRetryWelfare = !welfareSelected || now - lastWelfareTapAt >= 8_000
-            val targets = (if (canRetryWelfare) listOf("签到", "福利") else listOf("签到"))
-                .filter { (navigationTapCounts[it] ?: 0) < 2 }
+            val targets = if (canRetryWelfare) listOf("签到", "福利") else listOf("签到")
             val action = waitForCheckInNavigationText(ctx, targets, 3_000)
             if (action != null) {
-                val step = if (action.target == "福利") "$id:welfare_tab" else "$id:sign_in"
-                if (!ctx.tryTaskStep(step)) return false
-                navigationTapCounts[action.target] = (navigationTapCounts[action.target] ?: 0) + 1
                 ctx.log("识别到${action.target}，点击 (${action.point.x},${action.point.y})")
                 ctx.device.tap(action.point.x, action.point.y)
                 if (action.target == "福利") {
@@ -195,12 +250,11 @@ class CheckInTask(
                 continue
             }
 
-            if (ctx.elapsedRealtime() - lastGiftTapAt >= 6_000 && giftRetryCount < 1) {
+            if (ctx.elapsedRealtime() - lastGiftTapAt >= 6_000 && giftRetryCount < 2) {
                 val gift = ctx.waitUntil(1_200, 300) { screen ->
                     GameScreenDetector.findGiftHudIcon(screen, hudMenu)
                 }
                 if (gift != null) {
-                    if (!ctx.tryTaskStep("$id:gift")) return false
                     giftRetryCount++
                     lastGiftTapAt = ctx.elapsedRealtime()
                     ctx.log("福利尚未加载且礼盒仍在，重新识别后再次点击")
@@ -263,34 +317,47 @@ class CheckInTask(
         return null
     }
 
-    private suspend fun tapFromLeft(ctx: BotContext, x: Float, y: Float): Boolean {
-        if (!ctx.tryTaskStep("$id:welfare_back")) return false
+    private suspend fun tapFromLeft(ctx: BotContext, x: Float, y: Float) {
         val size = ctx.device.screenSize()
         val scale = size.y / 525f
         ctx.device.tap(
             (x * scale).toInt().coerceIn(0, size.x - 1),
             (y * scale).toInt().coerceIn(0, size.y - 1),
         )
-        return true
     }
 
     private suspend fun finish(ctx: BotContext, checked: Boolean, detail: String): TaskResult {
-        if (keepWelfareOpenForSupply) {
-            ctx.log("签到完成，保留福利页，继续执行供给")
+        if (ctx.preserveTaskPage) {
+            ctx.log("任务完成，保留福利页，由下一任务按状态导航")
             return TaskResult(title, checked, detail)
         }
-        ctx.log("签到完成，点击左上角退出福利页，不再检查游戏主界面")
-        if (!tapFromLeft(ctx, 45f, 27f)) {
-            return TaskResult(title, false, "$detail；退出福利页已重试一次，未再点击")
+        if (keepWelfareOpenForSupply) {
+            val specialActionVisible = ctx.waitUntil(1_500, 350) { screen ->
+                if (WelfareNavigationDetector.hasSpecialActionTab(screen)) center(screen) else null
+            } != null
+            if (specialActionVisible) {
+                return TaskResult(title, checked, detail)
+            }
         }
-        return TaskResult(title, checked, detail)
+        if (isGameHud(ctx)) {
+            ctx.log("已在游戏主界面，不再点击左上角返回")
+            return TaskResult(title, checked, detail)
+        }
+        ctx.log("退出福利页")
+        tapFromLeft(ctx, 45f, 27f)
+        repeat(5) {
+            if (isGameHud(ctx)) {
+                return TaskResult(title, checked, detail)
+            }
+        }
+        return TaskResult(title, false, "$detail；未能返回游戏主界面")
     }
 
     private suspend fun returnToGame(ctx: BotContext): Boolean {
         if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (isGameHud(ctx)) return true
         ctx.log("点击左上角返回游戏主界面")
-        if (!tapFromLeft(ctx, 45f, 27f)) return false
+        tapFromLeft(ctx, 45f, 27f)
         repeat(8) {
             if (isGameHud(ctx)) return true
         }

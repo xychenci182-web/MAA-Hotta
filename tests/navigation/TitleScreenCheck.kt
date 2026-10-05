@@ -107,37 +107,7 @@ fun checkTitleScreenFastPath() {
             box(width, height, left, 0.722f, right, 0.785f, Color(40, 90, 220))
         }
     }
-    check(TitleScreenDetector.findEntry(recovery) != null)
-    check(TitleScreenDetector.findUnobstructedEntry(recovery) != null) {
-        "reward-recovery color blocks must not divert the title route"
-    }
-    val rewardTitle = Bitmap(ImageIO.read(File("app/src/main/assets/templates/reward_recovery_title.png")))
-    check(RewardRecoveryDetector.match(recovery, rewardTitle) == null) {
-        "solid color layout matched the reward-recovery title crop"
-    }
-    fun placeTitle(x: Int, y: Int): Bitmap {
-        val image = BufferedImage(1280, 720, BufferedImage.TYPE_INT_ARGB)
-        val graphics = image.createGraphics()
-        graphics.color = Color(18, 30, 46)
-        graphics.fillRect(0, 0, 1280, 720)
-        graphics.drawImage(rewardTitle.image, x, y, null)
-        graphics.dispose()
-        return Bitmap(image)
-    }
-    val placed = RewardRecoveryDetector.match(
-        placeTitle(RewardRecoveryDetector.CROP_LEFT, RewardRecoveryDetector.CROP_TOP),
-        rewardTitle,
-    )
-    check(placed != null && placed.score >= RewardRecoveryDetector.THRESHOLD) {
-        "fixed-position reward-recovery title was not recognized"
-    }
-    check(RewardRecoveryDetector.match(placeTitle(RewardRecoveryDetector.CROP_LEFT, 40), rewardTitle) == null) {
-        "reward-recovery title outside the fixed crop was recognized"
-    }
-    for (name in listOf("main", "main-wide", "emulator-main", "user-main-window", "password-submit", "confirmation")) {
-        val actual = Bitmap(ImageIO.read(File("tests/hud/fixtures/$name.png")))
-        check(RewardRecoveryDetector.match(actual, rewardTitle) == null) { "$name fixture falsely matched reward recovery" }
-    }
+    rejectsVisibleTitle("reward recovery", recovery, RewardRecoveryDetector.isVisible(recovery))
 
     val missingRail = title { width, height -> box(width, height, 0.38f, 0.86f, 0.45f, 0.92f, background) }
     check(TitleScreenDetector.findUnobstructedEntry(missingRail) == null)
@@ -147,5 +117,5 @@ fun checkTitleScreenFastPath() {
         val actual = Bitmap(ImageIO.read(File("tests/hud/fixtures/$name.png")))
         check(TitleScreenDetector.findUnobstructedEntry(actual) == null) { "$name fixture falsely became a title screen" }
     }
-    println("PASS unobstructed title preserves entry; announcement/account/confirmation layouts block early routing; reward recovery matches only its fixed title crop")
+    println("PASS unobstructed title preserves entry; announcement/account/confirmation/recovery layouts block early routing (synthetic title coverage)")
 }

@@ -5,7 +5,7 @@ import android.graphics.Color
 import android.graphics.Point
 import kotlin.math.roundToInt
 
-/** Finds weekday-specific cards, the reward overlay, and claimed check marks. */
+/** Finds the highlighted day, the reward overlay, and the claimed check mark. */
 object CheckInScreenDetector {
     private const val REFERENCE_HEIGHT = 525f
 
@@ -50,23 +50,6 @@ object CheckInScreenDetector {
 
     fun isSignInPage(screen: Bitmap): Boolean = signInCenters(screen) != null
 
-    /** ISO weekday: Monday = DAY 1, Sunday = DAY 7. Never choose a different highlighted card. */
-    fun findDay(screen: Bitmap, dayOfWeek: Int): MatchResult? {
-        if (dayOfWeek !in 1..7 || isRewardPopup(screen)) return null
-        val centers = signInCenters(screen) ?: return null
-        if (labelScore(screen, centers) != 7) return null
-        val x = centers[dayOfWeek - 1]
-        val y = (390 * screen.height / REFERENCE_HEIGHT).roundToInt()
-        if (x !in 0 until screen.width || y !in 0 until screen.height) return null
-        return MatchResult(Point(x, y), 1f)
-    }
-
-    /** A check on any other DAY is not evidence that this weekday has been claimed. */
-    fun hasDayClaimCheck(screen: Bitmap, dayOfWeek: Int): Boolean {
-        val day = findDay(screen, dayOfWeek) ?: return false
-        return hasClaimCheck(screen, day.point.x.toFloat() / screen.width)
-    }
-
     private fun yellow(color: Int): Boolean =
         Color.red(color) > 205 && Color.green(color) > 165 && Color.blue(color) < 205 &&
             Color.red(color) - Color.blue(color) > 55
@@ -88,14 +71,6 @@ object CheckInScreenDetector {
             }
         }
         return if (sampled == 0) 0f else yellowCount.toFloat() / sampled
-    }
-
-    /** Only the selected weekday's yellow header and card surface determine whether to click. */
-    fun hasDayHighlight(screen: Bitmap, dayOfWeek: Int): Boolean {
-        val day = findDay(screen, dayOfWeek) ?: return false
-        val top = yellowRatio(screen, day.point.x, 320, 354)
-        val body = yellowRatio(screen, day.point.x, 365, 445)
-        return top >= 0.18f && body >= 0.20f
     }
 
     fun findClaimable(screen: Bitmap): MatchResult? {

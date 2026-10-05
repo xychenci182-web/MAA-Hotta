@@ -44,7 +44,7 @@ class IslandMerchantTask(
                 "人工岛页未识别到头像，也无法返回必做页复核", retryable = false)
         }
         var lastFailure = "未进入休闲页"
-        for (attempt in 1..2) {
+        for (attempt in 1..3) {
             ctx.log("人工岛老头第 $attempt 次检查")
             if (!RequiredHubNavigator.selectLeisureByText(ctx)) {
                 lastFailure = "未能进入必做页或点击休闲"
@@ -55,7 +55,6 @@ class IslandMerchantTask(
             var card = waitForIslandCard(ctx, islandCard, 1_200)
             if (card == null) {
                 ctx.log("当前可见卡片中未找到人工岛建筑，上滑查看底部卡片")
-                if (!ctx.tryTaskStep("$id:scroll_grid")) break
                 swipeCardGridUp(ctx)
                 card = waitForIslandCard(ctx, islandCard, 2_500)
             }
@@ -74,7 +73,6 @@ class IslandMerchantTask(
             }
             ctx.log("人工岛建筑卡片有红点，进入页面二次验证")
             ctx.log("点击人工岛建筑卡片，进入后检查右侧老头头像")
-            if (!ctx.tryTaskStep("$id:enter_island")) break
             ctx.device.tap(card.point.x, card.point.y)
             if (ctx.waitUntil(4_000, 350) { screen ->
                     IslandMerchantScreenDetector.findIslandPage(screen, islandPage)
@@ -108,7 +106,7 @@ class IslandMerchantTask(
             return TaskResult(title, true, "账号 $accountId：有老头，等待记录角色名称")
         }
         ctx.saveTaskDiagnostic(id)
-        return TaskResult(title, false, "$lastFailure；重试1次后仍失败")
+        return TaskResult(title, false, "$lastFailure；已重试3次")
     }
 
     private suspend fun waitForIslandCard(

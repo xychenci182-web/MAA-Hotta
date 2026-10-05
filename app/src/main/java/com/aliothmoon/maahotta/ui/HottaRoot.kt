@@ -1300,7 +1300,7 @@ private fun taskLabel(task: DailyTask): String = when (task) {
 }
 
 private fun taskSubtitle(task: DailyTask, o: TaskOptions): String = when (task) {
-    DailyTask.CHECK_IN -> "按本地星期领取黄色 DAY，关闭奖励弹窗"
+    DailyTask.CHECK_IN -> "领取当日签到奖励"
     DailyTask.SUPPLY -> "领取特别行动版及累计奖励"
     DailyTask.MAIL -> "一键领取邮件附件 · ${weekdaySummary(o.mailWeekdays)}"
     DailyTask.KITCHEN -> "品尝至完成 · ${weekdaySummary(o.kitchenWeekdays)}"

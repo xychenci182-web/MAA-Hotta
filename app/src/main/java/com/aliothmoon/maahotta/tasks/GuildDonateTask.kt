@@ -41,10 +41,7 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
 
         var donateButton = initialState
         var confirmation: MatchResult? = null
-        for (attempt in 1..2) {
-            if (!ctx.tryTaskStep("$id:donate_open")) {
-                return failAndExit(ctx, "立即捐献入口已重试一次，停止重复点击")
-            }
+        for (attempt in 1..3) {
             ctx.log(if (attempt == 1) "识别到立即捐献，点击" else "捐献弹窗未出现，重新识别后再次点击立即捐献")
             ctx.device.tap(donateButton.point.x, donateButton.point.y)
             confirmation = waitForConfirmation(ctx, confirmText, confirmButton, 2_500)
@@ -64,12 +61,6 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
         }
         val confirmButtonMatch = requireNotNull(confirmation)
         ctx.log("已确认捐献弹窗内容，提交一次并等待次数变为0/1")
-        ctx.onTaskFailureRecovery { _, _ ->
-            if (waitForDonateZero(ctx, donateZero, donateOne, 3_000) != null) {
-                if (ctx.safety.pendingStepId == "$id:confirm_donation") ctx.confirmActionResult()
-                finish(ctx, "全局验证确认捐献次数0/1")
-            } else null
-        }
         ctx.markActionSubmitted("$id:confirm_donation")
         ctx.device.tap(confirmButtonMatch.point.x, confirmButtonMatch.point.y)
         val donated = waitForDonateZero(ctx, donateZero, donateOne, 9_000) != null
@@ -97,7 +88,7 @@ class GuildDonateTask(private val keepGuildOpenForRewards: Boolean) : GameTask {
     }
 
     private suspend fun failAndExit(ctx: BotContext, detail: String): TaskResult {
-        ctx.log("$detail，保留当前页面供全局验证")
+        GuildNavigation.exitToGameHud(ctx)
         return TaskResult(title, false, detail)
     }
 

@@ -8,14 +8,15 @@ import kotlin.math.roundToInt
 /** Recognizes the bright "点击进入" caption and cyan rails on the game title screen. */
 object TitleScreenDetector {
     /** Same-frame positive title evidence that is safe to use before slower login routing. */
-    fun findUnobstructedEntry(screen: Bitmap, checkBlockingPopups: Boolean = true): MatchResult? {
+    fun findUnobstructedEntry(screen: Bitmap): MatchResult? {
         val entry = findEntry(screen) ?: return null
         if (AnnouncementDetector.hasLayout(screen) ||
-            (checkBlockingPopups && GameScreenDetector.hasConfirmationPanel(screen)) ||
+            RewardRecoveryDetector.isVisible(screen) ||
+            GameScreenDetector.hasConfirmationPanel(screen) ||
             AccountScreenDetector.isUserCenter(screen) ||
             AccountScreenDetector.isAccountList(screen) ||
             AccountScreenDetector.isQuickLogin(screen) ||
-            (checkBlockingPopups && AccountScreenDetector.findPasswordSubmit(screen) != null)
+            AccountScreenDetector.findPasswordSubmit(screen) != null
         ) return null
         return entry
     }

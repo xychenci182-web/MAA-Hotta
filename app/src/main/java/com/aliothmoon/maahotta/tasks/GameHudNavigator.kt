@@ -28,7 +28,6 @@ internal object GameHudNavigator {
             when (ctx.gameScreen()) {
                 GameScreen.HUD -> return true
                 GameScreen.MENU -> if (closeAttempts < 2) {
-                    if (!ctx.tryTaskStep("navigation:close_menu")) return false
                     ctx.tap(Layout.hudMenuClose, 500)
                     closeAttempts++
                     continue

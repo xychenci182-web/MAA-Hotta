@@ -39,12 +39,6 @@ class AccountTransitionTask(
             ?: return TaskResult(title, false, "用户中心模板未载入")
 
         if (nextAccount == null && !captureCharacterName) {
-            ctx.onTaskFailureRecovery { _, page ->
-                if (ctx.accountSession.isVerifiedFor(currentAccount.id) &&
-                    page.state == com.aliothmoon.maahotta.vision.PageState.HUD && ctx.hasEnteredGame()) {
-                    TaskResult(title, true, "最后一个账号无需记录名称")
-                } else null
-            }
             if (!ensureGameHud(ctx)) {
                 return TaskResult(title, false, "最后一个账号结束后未能确认游戏主界面")
             }
@@ -73,16 +67,7 @@ class AccountTransitionTask(
 
         val next = nextAccount
         if (next == null) {
-            ctx.onTaskFailureRecovery { _, page ->
-                if (ctx.accountSession.isVerifiedFor(currentAccount.id) &&
-                    page.state == com.aliothmoon.maahotta.vision.PageState.HUD && ctx.hasEnteredGame()) {
-                    TaskResult(title, true, characterName?.let { "已记录角色名称 $it" } ?: "本账号无需记录名称")
-                } else null
-            }
             ctx.log("已是最后一个账号，点击左上角返回游戏主界面")
-            if (!ctx.tryTaskStep("account:back")) return TaskResult(
-                title, false, "记录名称后返回重试1次仍未完成", retryable = false,
-            )
             ctx.tap(Layout.back, 700)
             val exited = waitForGameHud(ctx, 8_000)
             return TaskResult(
@@ -101,9 +86,6 @@ class AccountTransitionTask(
         repeat(2) {
             if (!userCenterOpened) {
                 ctx.log("点击用户中心，准备直接输入下一账号")
-                if (!ctx.tryTaskStep("account:open_user_center")) return TaskResult(
-                    title, false, "用户中心重试1次后仍未打开", retryable = false,
-                )
                 ctx.device.tap(userCenterButton.point.x, userCenterButton.point.y)
                 userCenterOpened = waitForUserCenterOverlay(ctx, 3_000)
             }
@@ -113,15 +95,6 @@ class AccountTransitionTask(
         }
 
         ctx.invalidateAccountIdentity()
-        ctx.onTaskFailureRecovery { _, page ->
-            // Never recover a transition by logging back into the old account.
-            if (ctx.accountSession.isVerifiedFor(next.id) &&
-                page.state == com.aliothmoon.maahotta.vision.PageState.HUD && ctx.hasEnteredGame()) {
-                TaskResult(title, true,
-                    characterName?.let { "已记录 $it，并直接登录下一账号 ${next.label}" }
-                        ?: "已直接登录下一账号 ${next.label}")
-            } else null
-        }
         val login = LoginTask(
             account = next,
             launchGame = false,
@@ -180,8 +153,7 @@ class AccountTransitionTask(
     private suspend fun ensureGameHud(ctx: BotContext): Boolean {
         if (ctx.preserveTaskPage) return TaskNavigationMachine.reach(ctx, com.aliothmoon.maahotta.vision.NavigationGoal.HUD)
         if (GameHudNavigator.ensurePlainHud(ctx)) return true
-        repeat(2) {
-            if (!ctx.tryTaskStep("account:back")) return false
+        repeat(5) {
             ctx.tap(Layout.back, 650)
             if (waitForGameHud(ctx, 3_000)) return true
         }
@@ -203,7 +175,6 @@ class AccountTransitionTask(
         settingsMenu: Bitmap,
         userCenter: Bitmap,
     ): MatchResult? {
-        // These rounds advance distinct pages; retry budgets belong to each action below.
         repeat(5) {
             val currentSettings = waitForUserCenter(ctx, userCenter, 1_200)
             if (currentSettings != null) {
@@ -214,7 +185,6 @@ class AccountTransitionTask(
             val settingsEntry = waitForSettingsMenu(ctx, settingsMenu, 1_200)
             if (settingsEntry != null) {
                 ctx.log("当前菜单已经展开，直接点击设置")
-                if (!ctx.tryTaskStep("account:open_settings")) return null
                 ctx.device.tap(settingsEntry.point.x, settingsEntry.point.y)
                 delay(900)
                 return@repeat
@@ -223,7 +193,6 @@ class AccountTransitionTask(
             val menu = waitForHudMenu(ctx, hudMenu, 1_200)
             if (menu != null) {
                 ctx.log("当前在游戏主界面，识别并点击右上角菜单")
-                if (!ctx.tryTaskStep("navigation:open_menu")) return null
                 ctx.device.tap(menu.point.x, menu.point.y)
                 delay(700)
                 return@repeat
@@ -234,7 +203,6 @@ class AccountTransitionTask(
                 delay(700)
             } else {
                 ctx.log("当前不在主界面、展开菜单或设置页，返回后重新判断")
-                if (!ctx.tryTaskStep("account:back")) return null
                 ctx.tap(Layout.back, 700)
             }
         }
